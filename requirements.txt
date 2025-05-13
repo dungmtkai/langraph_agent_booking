@@ -1,0 +1,3 @@
+langgraph
+langgraph-supervisor
+langchain[openai]
