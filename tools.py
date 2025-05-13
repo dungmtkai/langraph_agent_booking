@@ -3,6 +3,7 @@ import json
 import requests
 from config import CITY_IDS
 from utils import euclidean_distance
+appointments = []
 
 
 def collect_booking_info(
@@ -18,7 +19,7 @@ def collect_booking_info(
             "Dạ, hệ thống bên em có hơn 100 chi nhánh trên khắp cả nước, như Hà Nội, Hồ Chí Minh, Hải Phòng, Bình Dương, Vinh, Đồng Nai... Anh ở khu vực nào để em giúp tìm salon gần nhất"
         )
     if not date:
-        messages.append("Bạn muốn đặt lịch vào ngày nào? (Định dạng: DD_MM_YYYY)")
+        messages.append("Bạn muốn đặt lịch vào ngày nào? (Định dạng: DD-MM-YYYY)")
     if not time:
         messages.append("Bạn muốn đặt lịch vào khung giờ nào? (Định dạng: HH:MM, từ 08:00 đến 20:00)")
     if not phone:
@@ -43,12 +44,17 @@ def list_branches() -> str:
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
 
 
-@tool
+@tool(parse_docstring=True)
 def get_near_salon(user_address: str, city: str) -> str:
-    """Suggest the nearest salon based on user address and city.
+    """
+    Suggest the nearest salon based on user address and city.
+
     Args:
-        user_address (str): The street address or specific location provided by the user
-        city (str): The city name where the user is located
+        user_address (str): The street address or specific location provided by the user.
+        city (str): The city name where the user is located.
+
+    Returns:
+        str: Result of the tool.
     """
     url = f"https://geocode.search.hereapi.com/v1/geocode?q={user_address}+{city}&apiKey=A7V_JCsxV2Y_A_WBg00q_mUB-bDCynwEhwaZeT6QfwY&limit=1"
     try:
@@ -86,13 +92,18 @@ def get_near_salon(user_address: str, city: str) -> str:
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
 
 
-@tool
-def check_availability(branch: str, date: str, time: str):
-    """Check available time slots for a specific branch and date.
+@tool(parse_docstring=True)
+def check_availability(salon_address: str, date: str, time: str):
+    """
+    Check available time slots for a specific branch and date.
+
     Args:
-            time (Optional[str]): The time of the appointment in 'HH:MM' format (e.g., 14:30). Must be between 08:00 and 20:00
-            branch (Optional[str]): The name of the salon branch
-            date (Optional[str]): The date of the appointment in DD-MM_YYYY format
+        salon_address (str): The address of the salon branch.
+        date (str): The date of the appointment in 'DD-MM-YYYY' format.
+        time (str): The time of the appointment in 'HH:MM' format. Must be between 08:00 and 20:00.
+
+    Returns:
+        str: Result of the tool.
     """
 
     # Get salon id
@@ -104,7 +115,7 @@ def check_availability(branch: str, date: str, time: str):
         all_salon = data["data"]
         id_salon = None
         for salon in all_salon:
-            if salon["addressNew"] == branch:
+            if salon["addressNew"] == salon_address:
                 id_salon = salon["id"]
                 break
 
@@ -137,8 +148,8 @@ def check_availability(branch: str, date: str, time: str):
             )
 
             # Kết quả trả về
-            return_response= {"isFree": False, "hourId": "", "subHourId": "", "nearest_free_before": None,
-                        "nearest_free_after": None}
+            return_response = {"isFree": False, "hourId": "", "subHourId": "", "nearest_free_before": None,
+                               "nearest_free_after": None}
 
             if find_hour_group:
                 # Tìm thời gian khớp trong nhóm giờ hiện tại
@@ -210,25 +221,33 @@ def check_availability(branch: str, date: str, time: str):
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
 
 
-@tool
-async def book_appointment(
+@tool(parse_docstring=True)
+def book_appointment(
         time: str,
-        branch: str,
+        salon_address: str,
         date: str,
-        phone: str
+        booking_phone: str
 ) -> str:
-    """Book a haircut appointment.
-        Args:
-            time str: The time of the appointment in 'HH:MM' format (e.g., "14:30"). Must be between 08:00 and 20:00
-            branch str: The name of the salon branch (e.g., "Cơ sở Hà Nội").
-            date str: The date of the appointment in 'DD-MM_YYYY format (e.g., "10-05-2025").
-            phone str: The user's phone number for confirming the appointment.
     """
-    if not all([branch, date, time, phone]):
-        result =collect_booking_info(branch, date, time, phone)
-        texts = [msg.content if isinstance(msg.content, str) else msg.content.text
-                 for msg in result.messages]
-        return "\n".join(texts)
+    Book a haircut appointment.
+
+    Args:
+        time (str): The time of the appointment in 'HH:MM'. Must be between 08:00 and 20:00.
+        salon_address (str): The address of the salon branch.
+        date (str): The date of the appointment in 'DD-MM-YYYY' format.
+        booking_phone (str): The user's phone number for confirming the appointment.
+
+    Returns:
+        str: Result of the tool.
+    """
+
+    if not salon_address:
+        return "Dạ, hệ thống bên em có hơn 100 chi nhánh trên khắp cả nước, như Hà Nội, Hồ Chí Minh, Hải Phòng, Bình Dương, Vinh, Đồng Nai... Anh ở khu vực nào để em giúp tìm salon gần nhất"
+    # if not all([branch, date, time, phone]):
+    #     result = collect_booking_info(branch, date, time, phone)
+    #     texts = [msg.content if isinstance(msg.content, str) else msg.content.text
+    #              for msg in result.messages]
+    #     return "\n".join(texts)
 
     try:
         hour = int(time.split(":")[0])
@@ -238,28 +257,34 @@ async def book_appointment(
         return "Định dạng giờ không hợp lệ. Vui lòng sử dụng định dạng HH:MM."
 
     for appt in appointments:
-        if appt["branch"] == branch and appt["date"] == date and appt["time"] == time:
+        if appt["branch"] == salon_address and appt["date"] == date and appt["time"] == time:
             return "Khung giờ này đã được đặt. Vui lòng chọn khung giờ khác."
 
     appointments.append({
-        "branch": branch,
+        "branch": salon_address,
         "date": date,
         "time": time,
-        "phone": phone
+        "phone": booking_phone
     })
-    return f"Đã đặt lịch thành công tại {branch} vào {date} lúc {time} cho số điện thoại {phone}."
+    return f"Đã đặt lịch thành công tại {salon_address} vào {date} lúc {time} cho số điện thoại {booking_phone}."
 
+@tool(parse_docstring=True)
+def cancel_appointment(cancel_phone: str) -> str:
+    """
+        Cancel an appointment based on phone number.
 
-@tool
-def cancel_appointment(phone: str) -> str:
-    """Cancel an appointment based on phone number."""
-    global appointments
-    initial_count = len(appointments)
-    appointments = [appt for appt in appointments if appt["phone"] != phone]
-    if len(appointments) < initial_count:
-        return f"Đã hủy lịch hẹn cho số điện thoại {phone}."
-    return f"Không tìm thấy lịch hẹn cho số điện thoại {phone}."
+        Args:
+            cancel_phone (str): The number phone that user used to cancel apointment
+
+        Returns:
+            str: Result of the tool.
+        """
+    if cancel_phone == "0366761395":
+        return f"Đã hủy lịch hẹn cho số điện thoại {cancel_phone}."
+    return f"Không tìm thấy lịch hẹn cho số điện thoại {cancel_phone}."
+
 
 @tool()
 def faq_answer():
-    return "èef"
+    """Answer question about 30Shine"""
+    return "Giá cắt tóc ở 30 Shine là 100 nghìn"
