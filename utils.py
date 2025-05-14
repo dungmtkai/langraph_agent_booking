@@ -1,3 +1,6 @@
+from langchain_core.messages import HumanMessage, AIMessage
+
+
 def euclidean_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate squared Euclidean distance between two points (no square root for efficiency)."""
     dlat = lat2 - lat1
@@ -46,3 +49,22 @@ def pretty_print_messages(update, last_message=False):
         for m in messages:
             pretty_print_message(m, indent=is_subgraph)
         print("\n")
+
+
+def parse_langgraph_output(stream):
+    results = []
+
+    # Nếu stream là tuple, chuyển sang dict
+    if isinstance(stream, tuple) and len(stream) == 2 and isinstance(stream[1], dict):
+        stream = stream[1]
+
+    for key, value in stream.items():
+        if key == "supervisor":
+            continue
+        messages = value.get("messages", [])
+        for msg in messages:
+            if isinstance(msg, str):
+                results.append((key, msg))
+            elif isinstance(msg, AIMessage):
+                results.append((key, msg.content))
+    return results
