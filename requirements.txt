@@ -1,3 +1,5 @@
 langgraph
 langgraph-supervisor
 langchain[openai]
+python-dotenv
+streamlit

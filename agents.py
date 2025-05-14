@@ -121,18 +121,18 @@ supervisor = create_supervisor(
 #     .compile()
 # )
 
-for chunk in supervisor.stream(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Tôi muốn đặt lịch cắt tóc lúc 10h sáng mai và giá ở 30 shine như nào",
-                }
-            ]
-        },
-        subgraphs=True,
-):
-    pretty_print_messages(chunk, last_message=True)
+# for chunk in supervisor.stream(
+#         {
+#             "messages": [
+#                 {
+#                     "role": "user",
+#                     "content": "Tôi muốn đặt lịch cắt tóc lúc 10h sáng mai và giá ở 30 shine như nào",
+#                 }
+#             ]
+#         },
+#         subgraphs=True,
+# ):
+#     pretty_print_messages(chunk, last_message=True)
 
 
 # final_message_history = chunk["supervisor"]["messages"]
