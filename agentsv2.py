@@ -1,3 +1,4 @@
+from langchain.agents import AgentExecutor
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -10,7 +11,7 @@ from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV2
 from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, faq_answer
 from dotenv import load_dotenv
 from langgraph.graph import END
-from typing import Annotated, TypedDict, Literal, Any
+from typing import Annotated, TypedDict, Literal, Any, Optional
 from langgraph.graph import StateGraph, START
 from langgraph.types import Command
 from datetime import datetime
@@ -18,18 +19,17 @@ from datetime import datetime
 load_dotenv()
 from langgraph.graph.message import add_messages
 
-
-class Router(TypedDict):
-    next: Literal["information_node", "booking_node", "FINISH"]
-    reasoning: str
-    your_answer: str
+from pydantic import BaseModel, Field
+class Router(BaseModel):
+    next: Literal["information_node", "booking_node", "FINISH"] = Field(description="The next node")
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[Any], add_messages]
+    agent_answer: Annotated[list[Any], add_messages]
     next: str
-    query: str
-    current_reasoning: str
+    # query: str
+    # current_reasoning: str
 
 
 current_date = datetime.now()
@@ -65,14 +65,14 @@ def booking_node(state: AgentState) -> Command[Literal['supervisor']]:
                                        tools=[book_appointment, cancel_appointment, check_availability, get_near_salon,
                                               list_branches],
                                        prompt=system_prompt)
-
     result = booking_agent.invoke(state)
 
     return Command(
         update={
             "messages": state["messages"] + [
-                AIMessage(content=result["messages"][-1].content, name="booking_node")
+                # AIMessage(content=result["messages"][-1].content, name="booking_node")
                 # HumanMessage(content=result["messages"][-1].content, name="booking_node")
+                result["messages"][-1].content
             ]
         },
         goto="supervisor",
@@ -108,10 +108,12 @@ def information_node(state: AgentState) -> Command[Literal['supervisor']]:
 
     result = information_agent.invoke(state)
 
+
     return Command(
         update={
             "messages": state["messages"] + [
-                AIMessage(content=result["messages"][-1].content, name="information_node")
+                # AIMessage(content=result["messages"][-1].content, name="information_node")
+                result["messages"][-1].content
             ]
         },
         goto="supervisor",
@@ -120,7 +122,8 @@ def information_node(state: AgentState) -> Command[Literal['supervisor']]:
 
 def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'booking_node', '__end__']]:
     print("**************************below is my state right after entering****************************")
-    print(state)
+
+
 
     messages = [
                    {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV2.format(worker_info=worker_info)}
@@ -138,7 +141,7 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
 
     print(response)
 
-    goto = response.get("next")
+    goto = response.next
 
     # print("********************************this is my goto*************************")
     # print(goto)
@@ -148,17 +151,15 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
 
     if goto == "FINISH":
         goto = END
-        return Command(goto=goto, update={'next': goto,
-                                          'current_reasoning': response["reasoning"],
-                                          'messages': [AIMessage(content=response["your_answer"])]})
+        # return Command(goto=goto, update={'next': goto,
+        #                                   'messages': [AIMessage(content=response["your_answer"])]})
 
     # print("**************************below is my state****************************")
     # print(state)
     print("**************************below is my answer****************************")
-    print(response["your_answer"])
+    # print(response["your_answer"])
 
-    return Command(goto=goto, update={'next': goto,
-                                      'current_reasoning': response["reasoning"]})
+    return Command(goto=goto, update={'next': goto})
 
 
 graph = StateGraph(AgentState)

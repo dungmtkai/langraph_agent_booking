@@ -41,7 +41,7 @@ BOOKING_SYSTEM_PROMPT = (
     "- After completing the task, respond only with the result — NO additional commentary.\n"
     "- If the task is unclear or unsupported, respond with an appropriate error using NO tool.\n"
     "- Do not fabricate the parameter used for the tool; instead, extract it from the user's message\n"
-    "- Chỉ call duy nhất 1 tool sau đó handoff cho supervisor"
+    "- Chỉ đưc phép dùng duy nhất 1 tool sau đó handoff cho supervisor"
     "Execution Rules:"
     "- You need to gather all necessary information from user message."
     "- Check available time slots before making an appointment."
@@ -59,6 +59,7 @@ infor_agent: Cung cấp thông tin tư vấn chi tiết cho khách hàng về c�
 
 Sau khi một trợ lý hoàn thành nhiệm vụ, bạn cần đọc tin nhắn cuối cùng trong cuộc hội thoại và tóm tắt hoặc phản hồi lại cho khách hàng một cách phù hợp.
 
+
 Nếu trợ lý cần thu thập thêm thông tin từ khách hàng, hãy END vòng lặp để hỏi người dùng.
 
 Phong cách phản hồi:
@@ -74,12 +75,11 @@ SUPERVISOR_SYSTEM_PROMPTV2 = (
     "### TRỢ LÝ CHUYÊN MÔN:\n"
     "{worker_info}\n\n"
     "Hãy phân chia nhiệm vụ phù hợp cho từng trợ lý chuyên môn. Mỗi người sẽ thực hiện phần việc của mình và phản hồi với kết quả cùng trạng thái thực hiện. "
-    "Sau khi một trợ lý hoàn thành nhiệm vụ, bạn cần đọc tin nhắn cuối cùng trong cuộc hội thoại và tóm tắt hoặc phản hồi lại cho khách hàng một cách phù hợp và FINISH.\n\n"
     "**QUY TẮC QUAN TRỌNG:**\n"
     "1. Nếu câu hỏi của khách hàng đã được trả lời rõ ràng và không cần thêm hành động nào nữa, hãy phản hồi FINISH.\n"
     "2. Nếu cuộc trò chuyện có dấu hiệu lặp lại hoặc vòng vo mà không đạt được tiến triển rõ ràng sau nhiều lượt trao đổi, hãy phản hồi FINISH.\n"
     "3. Nếu cuộc trò chuyện đã diễn ra hơn 10 bước, hãy lập tức phản hồi FINISH để tránh vòng lặp vô hạn.\n"
-    "4. Nếu các trợ lý chuyên môn cần khách hàng cung cấp thêm thông tin để thực hiện công việc, hãy phản hồi FINISH.\n"
+    "4. Nếu các trong câu trả lời của các agent cần khách hàng cung cấp thêm thông tin để thực hiện công việc, hãy phản hồi FINISH.\n"
     "5. Luôn sử dụng ngữ cảnh và kết quả trước đó để xác định xem nhu cầu của khách hàng đã được đáp ứng chưa. Nếu đã đáp ứng — phản hồi FINISH.\n\n"
     "Phong cách phản hồi:\n"
     "- Thân thiện và gần gũi, xưng là “Janie” hoặc dùng “em” với giọng nhẹ nhàng.\n"

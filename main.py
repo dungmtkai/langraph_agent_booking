@@ -5,7 +5,7 @@ import streamlit as st
 
 from langchain_core.messages import HumanMessage
 
-from agentsv2 import app
+from agents import supervisor
 
 # Cấu hình giao diện
 st.set_page_config(page_title="30Shine Chatbot", page_icon="💬")
@@ -47,7 +47,7 @@ if prompt := st.chat_input("Your question"):
     last_msg = None
 
     config = {"configurable": {"thread_id": "1", "recursion_limit": 5}}
-    for i, chunk in app.stream(inputs, subgraphs=True, config=config):
+    for i, chunk in supervisor.stream(inputs, subgraphs=True, config=config):
         messages = chunk.get('agent', {}).get('messages', [])
         if messages:
             last_msg = messages[-1].content
