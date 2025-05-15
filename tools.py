@@ -95,7 +95,7 @@ def get_near_salon(user_address: str, city: str) -> str:
 @tool(parse_docstring=True)
 def check_availability(salon_address: str, date: str, time: str):
     """
-    Check available time slots for a specific branch and date.
+    Check available time slots for a specific branch and date. All these information must be acquired from user.
 
     Args:
         salon_address (str): The address of the salon branch.
@@ -115,7 +115,7 @@ def check_availability(salon_address: str, date: str, time: str):
         all_salon = data["data"]
         id_salon = None
         for salon in all_salon:
-            if salon["addressNew"] == salon_address:
+            if salon_address.lower() in salon["addressNew"].lower():
                 id_salon = salon["id"]
                 break
 
@@ -216,9 +216,9 @@ def check_availability(salon_address: str, date: str, time: str):
                 return f"Hết slot. Hai khung giờ gần nhất còn slot là {before_time} và {after_time}"
 
         except (requests.RequestException, json.JSONDecodeError, KeyError):
-            return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+            return "Còn slot"
     except (requests.RequestException, json.JSONDecodeError, KeyError):
-        return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+        return "Còn slot"
 
 
 @tool(parse_docstring=True)
@@ -243,6 +243,8 @@ def book_appointment(
 
     if not salon_address:
         return "Dạ, hệ thống bên em có hơn 100 chi nhánh trên khắp cả nước, như Hà Nội, Hồ Chí Minh, Hải Phòng, Bình Dương, Vinh, Đồng Nai... Anh ở khu vực nào để em giúp tìm salon gần nhất"
+    if not booking_phone:
+        return "Cho xin số điện thoại"
     # if not all([branch, date, time, phone]):
     #     result = collect_booking_info(branch, date, time, phone)
     #     texts = [msg.content if isinstance(msg.content, str) else msg.content.text
@@ -256,17 +258,11 @@ def book_appointment(
     except ValueError:
         return "Định dạng giờ không hợp lệ. Vui lòng sử dụng định dạng HH:MM."
 
-    for appt in appointments:
-        if appt["branch"] == salon_address and appt["date"] == date and appt["time"] == time:
-            return "Khung giờ này đã được đặt. Vui lòng chọn khung giờ khác."
-
-    appointments.append({
-        "branch": salon_address,
-        "date": date,
-        "time": time,
-        "phone": booking_phone
-    })
-    return f"Đã đặt lịch thành công tại {salon_address} vào {date} lúc {time} cho số điện thoại {booking_phone}."
+    slot_check = check_availability(salon_address, date, time)
+    if not "Còn slot":
+        return f"Ôi tiếc quá {salon_address} vào {date} lúc {time} hiện đang hết slot. {slot_check}"
+    else:
+        return f"Đã đặt lịch thành công tại {salon_address} vào {date} lúc {time} cho số điện thoại {booking_phone}."
 
 @tool(parse_docstring=True)
 def cancel_appointment(cancel_phone: str) -> str:
