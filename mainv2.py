@@ -44,7 +44,7 @@ if prompt := st.chat_input("Your question"):
                 HumanMessage(content=prompt)
                 # HumanMessage(content='tell me about the Tu vu hospital in vietnam')
             ]
-    state = {'messages': inputs, "chat_history": st.session_state.chat_history[-6:-1], "query": prompt}
+    state = {'messages': inputs, "chat_history": st.session_state.chat_history[-7:-1], "query": prompt}
     # result = app.invoke(state, config=config)
     answer = None
     for event in app.stream(state, config=config):

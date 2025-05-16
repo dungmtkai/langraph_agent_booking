@@ -9,7 +9,7 @@ memory = MemorySaver()
 
 from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV2, SUPERVISOR_SYSTEM_PROMPTV3, valid_system_prompt
 from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, \
-    get_info
+    get_info, confirm_booking
 from dotenv import load_dotenv
 from langgraph.graph import END
 from typing import Annotated, TypedDict, Literal, Any, Optional
@@ -32,6 +32,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[Any], add_messages]
     query: str
     chat_history: Annotated[list[Any], add_messages]
+    agent_input: str
 
 
 class Router(BaseModel):
@@ -39,7 +40,7 @@ class Router(BaseModel):
     reason: str = Field(
         description="Detailed justification for the routing decision, explaining the rationale behind selecting the particular specialist and how this advances the task toward completion."
     )
-    input: str = Field(description="Yêu cầu được giao cho agent phù hợp với moo tả về công việc của agent")
+    agent_input: str = Field(description="Yêu cầu được giao cho agent phù hợp với moo tả về công việc của agent")
 
 
 current_date = datetime.now()
@@ -73,8 +74,8 @@ def booking_node(state: AgentState) -> Command[Literal['supervisor']]:
     )
     booking_agent = create_react_agent(model=openai_model,
                                        tools=[book_appointment, cancel_appointment, check_availability, get_near_salon,
-                                              list_branches],
-                                       version = "v2",
+                                              list_branches, confirm_booking],
+                                       version="v2", debug=True,
                                        prompt=system_prompt)
 
     query_part = [
@@ -157,7 +158,8 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
         HumanMessage(content=state["query"])
     ]
 
-    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV3}] + state["chat_history"] + [state["messages"][-1]] + user_query
+    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV3}] + state["chat_history"] + [
+        state["messages"][-1]] + user_query
 
     print(f"______________chat history___________________: \n{state['chat_history']}")
 
@@ -169,6 +171,9 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
 
     return Command(
         goto=goto,
+        update={
+            "agent_input": response.agent_input
+        },
     )
 
 
@@ -179,16 +184,22 @@ class Validator(BaseModel):
     reason: str = Field(
         description="The reason for the decision."
     )
-    answer: str = Field(
-        description="Base on the user message, agent message answer the user question"
-    )
 
 
 def validator_node(state: AgentState) -> Command[Literal["supervisor", "__end__"]]:
+    agent_answer = []
+    for st in state["messages"]:
+        if st.name in ["booking_node", "information_node"]:
+            agent_answer.append(st.content)
+    agent_answer_input = "\n".join(agent_answer)
+
+    # user_query = [
+    #     HumanMessage(content=f"""{agent_answer_input} \n User: {state["query"]}""")
+    # ]
+
     user_query = [
         HumanMessage(content=state["query"])
     ]
-
     messages = [
                    {"role": "system", "content": valid_system_prompt}
                ] + state["chat_history"] + state["messages"][1:] + user_query
@@ -203,9 +214,8 @@ def validator_node(state: AgentState) -> Command[Literal["supervisor", "__end__"
     if goto == "FINISH" or goto == END:
         goto = END
         print(" --- Transitioning to END ---")
-        print(response.answer)
         return Command(goto=goto, update={'next': goto,
-                                          'messages': [AIMessage(content=response.answer)]})
+                                          'messages': [AIMessage(content=agent_answer_input)]})
     else:
         print(f"--- Workflow Transition: Validator → Supervisor ---")
 

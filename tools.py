@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta
 from random import random
+from typing import Optional
 
 from langchain_core.tools import tool
 import json
 import requests
 from config import CITY_IDS
 from utils import euclidean_distance
+
 appointments = []
 
 
@@ -113,7 +115,7 @@ def check_availability(salon_address: str, date: str, time: str):
     fmt = "%H:%M"
     time_obj = datetime.strptime(time, fmt)
 
-    if random_slot < 0.1:
+    if time == "10:00":
         # Lấy thời gian trước và sau 20 phút
         time_before = time_obj - timedelta(minutes=20)
         time_after = time_obj + timedelta(minutes=20)
@@ -235,24 +237,32 @@ def check_availability(salon_address: str, date: str, time: str):
     #     return "Còn slot"
 
 
-@tool(parse_docstring=True)
+from pydantic import BaseModel, Field
+
+
+@tool()
+def confirm_booking():
+    """Confirm information booking before booking"""
+    return "Anh chị xác nhận thông tin đặt lịch với các thông tin đã cung cấp giúp em ạ"
+
+class BookingInput(BaseModel):
+    time: str = Field(..., description="The time of the appointment in 'HH:MM'. Must be between 08:00 and 20:00.")
+    salon_address: str = Field(..., description="The address of the salon branch.")
+    date: str = Field(..., description="The date of the appointment in 'DD-MM-YYYY' format.")
+    booking_phone: str = Field(..., description="The user's phone number for confirming the appointment.")
+    otp: Optional[str] = Field(None, description="The OTP code for booking.")
+
+
+@tool(args_schema=BookingInput)
 def book_appointment(
         time: str,
         salon_address: str,
         date: str,
-        booking_phone: str
+        booking_phone: str,
+        otp: Optional[str] = None
 ) -> str:
     """
     Book a haircut appointment.
-
-    Args:
-        time (str): The time of the appointment in 'HH:MM'. Must be between 08:00 and 20:00.
-        salon_address (str): The address of the salon branch.
-        date (str): The date of the appointment in 'DD-MM-YYYY' format.
-        booking_phone (str): The user's phone number for confirming the appointment.
-
-    Returns:
-        str: Result of the tool.
     """
 
     if not salon_address:
@@ -276,12 +286,17 @@ def book_appointment(
     # if not "Còn slot":
     #     return f"Ôi tiếc quá {salon_address} vào {date} lúc {time} hiện đang hết slot. {slot_check}"
     # else:
-    return f"Đã đặt lịch thành công tại {salon_address} vào {date} lúc {time} cho số điện thoại {booking_phone}."
+    # Send mã OTP:
+
+    if otp:
+        return f"Đã đặt lịch thành công tại {salon_address} vào {date} lúc {time} cho số điện thoại {booking_phone} với mã OTP là : {otp}."
+    return f"Em đã gữi mã OTP về số điện thoại {booking_phone} của anh chị. Anh chị vui lòng nhập mã OTP để em tiếp tục đặt lịch nhé."
+
 
 @tool(parse_docstring=True)
 def cancel_appointment(cancel_phone: str) -> str:
     """
-        Cancel an appointment based on phone number.
+        Cancel an appointment based on provide phone number.
 
         Args:
             cancel_phone (str): The number phone that user used to cancel apointment
