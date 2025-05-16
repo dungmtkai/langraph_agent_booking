@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 memory = MemorySaver()
 
 from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV2
-from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, faq_answer
+from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, get_info
 from dotenv import load_dotenv
 from langgraph.graph import END
 from typing import Annotated, TypedDict, Literal, Any, Optional
@@ -106,7 +106,7 @@ def information_node(state: MessagesState) -> Command[Literal['supervisor']]:
         ]
     )
 
-    information_agent = create_react_agent(model=openai_model, tools=[faq_answer, get_near_salon, list_branches],
+    information_agent = create_react_agent(model=openai_model, tools=[get_info, get_near_salon, list_branches],
                                            prompt=system_prompt)
 
     result = information_agent.invoke(state["messages"][-1])

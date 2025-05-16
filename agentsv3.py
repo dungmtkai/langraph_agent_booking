@@ -8,7 +8,8 @@ from langgraph.checkpoint.memory import MemorySaver
 memory = MemorySaver()
 
 from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV2, SUPERVISOR_SYSTEM_PROMPTV3, valid_system_prompt
-from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, faq_answer
+from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, \
+    get_info
 from dotenv import load_dotenv
 from langgraph.graph import END
 from typing import Annotated, TypedDict, Literal, Any, Optional
@@ -38,6 +39,7 @@ class Router(BaseModel):
     reason: str = Field(
         description="Detailed justification for the routing decision, explaining the rationale behind selecting the particular specialist and how this advances the task toward completion."
     )
+    input: str = Field(description="Yêu cầu được giao cho agent phù hợp với moo tả về công việc của agent")
 
 
 current_date = datetime.now()
@@ -72,10 +74,14 @@ def booking_node(state: AgentState) -> Command[Literal['supervisor']]:
     booking_agent = create_react_agent(model=openai_model,
                                        tools=[book_appointment, cancel_appointment, check_availability, get_near_salon,
                                               list_branches],
-                                       debug=True,
+                                       version = "v2",
                                        prompt=system_prompt)
 
-    input_for_agent = {"messages": state["chat_history"] + [state["query"]]}
+    query_part = [
+        HumanMessage(content=state["query"])
+    ]
+
+    input_for_agent = {"messages": state["chat_history"] + query_part}
     print(f"______________input for booking_node_______________:{input_for_agent}")
     result = booking_agent.invoke(input_for_agent)
 
@@ -101,6 +107,12 @@ def information_node(state: AgentState) -> Command[Literal['supervisor']]:
         "- You are a consultant specializing in services and information related to the 30Shine men's haircut system. "
         "- After you're done with your tasks, respond to the supervisor directly\n"
         "- Respond ONLY with the results of your work, do NOT include ANY other text."
+        "- Chỉ được phép dùng duy nhất 1 tool sau đó handoff cho validation"
+        "Phong cách phản hồi:"
+        "Thân thiện và gần gũi, xưng là “Janie” hoặc dùng “em” với giọng nhẹ nhàng."
+        "Gọi khách hàng là “anh”."
+        "Giữ giọng văn nhẹ nhàng, dễ thương, tránh dùng từ “nhé”."
+        "Luôn kết thúc câu bằng từ “ạ”."
     )
 
     system_prompt = ChatPromptTemplate.from_messages(
@@ -116,10 +128,12 @@ def information_node(state: AgentState) -> Command[Literal['supervisor']]:
         ]
     )
 
-    information_agent = create_react_agent(model=openai_model, tools=[faq_answer, get_near_salon, list_branches],
-                                           prompt=system_prompt)
-
-    input_for_agent = {"messages": state["chat_history"] + [state["query"]]}
+    information_agent = create_react_agent(model=openai_model, tools=[get_info, get_near_salon, list_branches],
+                                           prompt=system_prompt, version="v2")
+    query_part = [
+        HumanMessage(content=state["query"])
+    ]
+    input_for_agent = {"messages": state["chat_history"] + query_part}
     print(f"______________input for information_node_______________:{input_for_agent}")
 
     result = information_agent.invoke(input_for_agent)
@@ -140,10 +154,10 @@ def information_node(state: AgentState) -> Command[Literal['supervisor']]:
 def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'booking_node']]:
     print("**************************below is my state right after entering****************************")
     user_query = [
-        HumanMessage(content=state["query"], name="validator")
+        HumanMessage(content=state["query"])
     ]
 
-    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV3}] + state["chat_history"] + user_query
+    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV3}] + state["chat_history"] + [state["messages"][-1]] + user_query
 
     print(f"______________chat history___________________: \n{state['chat_history']}")
 
@@ -154,9 +168,6 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
     print(f"--- Workflow Transition: Supervisor → {goto.upper()} ---")
 
     return Command(
-        update={
-            "query": state["query"]
-        },
         goto=goto,
     )
 
@@ -174,14 +185,20 @@ class Validator(BaseModel):
 
 
 def validator_node(state: AgentState) -> Command[Literal["supervisor", "__end__"]]:
+    user_query = [
+        HumanMessage(content=state["query"])
+    ]
+
     messages = [
                    {"role": "system", "content": valid_system_prompt}
-               ] + state["chat_history"] + state["messages"][1:] + [state["query"]]
+               ] + state["chat_history"] + state["messages"][1:] + user_query
 
     response = openai_model.with_structured_output(Validator).invoke(messages)
 
     goto = response.next
     reason = response.reason
+
+    print(f"REASONING:{reason}\n MESSAGE: {messages}")
 
     if goto == "FINISH" or goto == END:
         goto = END

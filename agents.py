@@ -6,7 +6,7 @@ memory = MemorySaver()
 from langgraph_supervisor import create_supervisor
 
 from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT
-from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, faq_answer
+from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, get_info
 from dotenv import load_dotenv
 from langgraph.graph import END
 from typing import Annotated
@@ -29,7 +29,7 @@ booking_agent = create_react_agent(
 
 infor_agent = create_react_agent(
     model="openai:gpt-4o-mini",
-    tools=[faq_answer, get_near_salon, list_branches],
+    tools=[get_info, get_near_salon, list_branches],
     prompt=(
         "You are a faq agent.\n\n"
         "INSTRUCTIONS:\n"
