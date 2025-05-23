@@ -41,13 +41,16 @@ class AgentState(TypedDict):
 #     )
 #     input: str = Field(description="Yêu cầu được giao cho agent phù hợp với moo tả về công việc của agent")
 
-class TaskItem(BaseModel):
-    agent: str = Field(..., description="Tên của agent được giao xử lý task (ví dụ: 'fallback_node', 'booking_node', 'information_node')")
-    task: str = Field(..., description="Nhiệm vụ cụ thể được trích xuất từ truy vấn người dùng, dành cho agent xử lý")
+class Action(BaseModel):
+    name: str = Field(description="The name of the agent")
+    query: str = Field(description="The specific query for the agent")
 
 
-class AgentResponse(BaseModel):
-    response: List[TaskItem] = Field(..., description="Danh sách các task đã được phân tích và phân công cho từng agent")
+class AgentRequest(BaseModel):
+    thought: str = Field(description="Your reasoning about what to do next")
+    action: List[Action] = Field(description="List of actions with agent names and their queries")
+
+
 current_date = datetime.now()
 
 openai_model = ChatOpenAI(model="gpt-4o-mini")
@@ -91,7 +94,7 @@ def booking_node(state: AgentState) -> Command[Literal['validator']]:
     print(f"______________input for booking_node_______________:{input_for_agent}")
     result = booking_agent.invoke(input_for_agent)
     for task in state["list_tasks"]:
-        if task["agent"] == "booking_node":
+        if task["name"] == "booking_node":
             task["status"] = "done"
             break
 
@@ -131,6 +134,7 @@ Bạn có khả năng:
 - Tư vấn cung cấp các thông tin liên quan đến chỗ đỗ xe, chỗ để xe ô tô, bị phạt hay an toàn ...
 - Tư vấn thông tin về bãi đỗ xe liên quan tới các địa chỉ tại salon 30 Shine.
 Hãy trả lời câu hỏi của người dùng
+Always respond in the same language as the user's input.
 """
 
             ),
@@ -151,7 +155,7 @@ Hãy trả lời câu hỏi của người dùng
     print(f"______________input for fallback_node_______________:{input_for_agent}")
     result = booking_agent.invoke(input_for_agent)
     for task in state["list_tasks"]:
-        if task["agent"] == "fallback_node":
+        if task["name"] == "fallback_node":
             task["status"] = "done"
             break
 
@@ -182,7 +186,9 @@ def information_node(state: AgentState) -> Command[Literal['validator']]:
         "Thân thiện và gần gũi, xưng là “Janie” hoặc dùng “em” với giọng nhẹ nhàng."
         "Gọi khách hàng là “anh”."
         "Giữ giọng văn nhẹ nhàng, dễ thương, tránh dùng từ “nhé”."
-        "Luôn kết thúc câu bằng từ “ạ”."
+        "Luôn kết thúc câu bằng từ “ạ”.\n"
+        
+        "Always respond in the same language as the user's input."
     )
 
     system_prompt = ChatPromptTemplate.from_messages(
@@ -208,7 +214,7 @@ def information_node(state: AgentState) -> Command[Literal['validator']]:
 
     result = information_agent.invoke(input_for_agent)
     for task in state["list_tasks"]:
-        if task["agent"] == "information_node":
+        if task["name"] == "information_node":
             task["status"] = "done"
             break
 
@@ -232,13 +238,13 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
     if state.get("list_tasks"):
         for task in state["list_tasks"]:
             if task.get("status") != "done":
-                goto = task["agent"]
-                query = task["task"]
+                goto = task["name"]
+                query = task["query"]
                 break
 
         all_done = all(item.get("status") == "done" for item in state["list_tasks"])
         if all_done:
-            goto=END
+            goto = END
 
         return Command(
             goto=goto,
@@ -256,17 +262,20 @@ def supervisor_node(state: AgentState) -> Command[Literal['information_node', 'b
 
         print(f"______________chat history___________________: \n{state['chat_history']}")
 
-        response = openai_model.with_structured_output(AgentResponse).invoke(messages).response
+        response = openai_model.with_structured_output(AgentRequest).invoke(messages).action
         print("response", response)
 
-
-        goto = response[0].agent
+        goto = response[0].name
+        if len(response) == 1:
+            query = state["query"]
+        else:
+            query = response[0].query
 
         print(f"--- Workflow Transition: Supervisor → {goto.upper()} ---")
 
         return Command(
             goto=goto,
-            update={"list_tasks": [item.dict() for item in response], "query": response[0].task}
+            update={"list_tasks": [item.dict() for item in response], "query": query}
         )
 
 
