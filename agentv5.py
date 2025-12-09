@@ -1,7 +1,6 @@
-import os
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from random import random
 from utils import euclidean_distance
 from typing import TypedDict, Annotated, Literal, List
@@ -9,13 +8,12 @@ from typing import TypedDict, Annotated, Literal, List
 import streamlit as st
 from dotenv import load_dotenv
 
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AnyMessage
+from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
@@ -102,7 +100,6 @@ def get_info() -> str:
         "Anh cần tư vấn thêm gì không ạ?"
     )
 
-from langchain_core.tools import tool, StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 # Đầu tiên: chuyển tất cả tool thành định dạng OpenAI tool spec
 booking_tool_specs = [
@@ -157,6 +154,7 @@ Phân tích query và trả về đúng JSON theo schema.
 # ========================= CUSTOM BOOKING AGENT (thông minh + sequential) =========================
 llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
 
+# Danh sách tool
 booking_tools = [get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches]
 
 
@@ -179,16 +177,6 @@ class BookingPlan(BaseModel):
     )
     tool_call: ToolCall | None = Field(default=None, description="Thông tin tool cần gọi (nếu next_action=call_tool)")
     response: str = Field(default="", description="Câu trả lời cho user (nếu next_action=ask_user hoặc respond)")
-
-
-# Danh sách tool
-booking_tools = [
-    get_near_salon,
-    check_availability,
-    book_appointment,
-    cancel_appointment,
-    list_branches
-]
 
 
 # Hàm an toàn để lấy tên + tham số + description
@@ -530,8 +518,8 @@ class AgentState(TypedDict):
 
 
 class Action(BaseModel):
-    name: str = Field(description="The name of the agent")
-    query: str = Field(description="The specific query for the agent")
+    name: Literal["booking_node", "information_node"]
+    query: str = Field(..., description="Query gửi cho agent này")
 
 
 class AgentRequest(BaseModel):
@@ -541,11 +529,6 @@ class AgentRequest(BaseModel):
 
 class SupervisorPlan(BaseModel):
     actions: List[Action]
-
-
-class Action(BaseModel):
-    name: Literal["booking_node", "information_node"]
-    query: str = Field(..., description="Query gửi cho agent này")
 
 
 booking_agent = create_booking_agent()
