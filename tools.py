@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 from random import random
 
@@ -47,52 +48,123 @@ def list_branches() -> str:
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
 
 
-@tool(parse_docstring=True)
-def get_near_salon(user_address: str, city: str) -> str:
+# @tool(parse_docstring=True)
+# def get_near_salon(user_address: str, city: str) -> str:
+#     """
+#     Suggest the nearest salon based on user address and city.
+#
+#     Args:
+#         user_address (str): The street address or specific location provided by the user.
+#         city (str): The city name where the user is located.
+#
+#     Returns:
+#         str: Result of the tool.
+#     """
+#     url = f"https://geocode.search.hereapi.com/v1/geocode?q={user_address}+{city}&apiKey=A7V_JCsxV2Y_A_WBg00q_mUB-bDCynwEhwaZeT6QfwY&limit=1"
+#     try:
+#         response = requests.get(url, timeout=5)
+#         response.raise_for_status()
+#         data = json.loads(response.content.decode('utf-8-sig'))
+#         res = data["items"][0]
+#         city_id = CITY_IDS.get(res['address']['county'])
+#         if city_id is None:
+#             return "Không tìm thấy thành phố phù hợp. Vui lòng thử lại."
+#
+#         lat_lon = res['position']
+#         near_salon = {'city_id': city_id, 'lat': lat_lon['lat'], 'lon': lat_lon['lng']}
+#
+#         url_get_all_salon = "https://storage.30shine.com/web/v3/configs/get_all_salon.json"
+#         response = requests.get(url_get_all_salon, timeout=5)
+#         response.raise_for_status()
+#         data = json.loads(response.content.decode('utf-8-sig'))
+#
+#         salons = [x for x in data["data"] if x["cityId"] == near_salon['city_id']]
+#         salons.sort(
+#             key=lambda x: euclidean_distance(
+#                 near_salon['lat'], near_salon['lon'], x['latitude'], x['longitude']
+#             )
+#         )
+#
+#         if not salons:
+#             return "Không tìm thấy salon nào gần khu vực của bạn."
+#
+#         list_salon = "Danh sách salon\n" + "\n".join(
+#             f"- **{x['addressNew']}**" for x in salons[:5]
+#         )
+#         return list_salon
+#     except (requests.RequestException, json.JSONDecodeError, KeyError):
+#         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+
+
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
-    Suggest the nearest salon based on user address and city.
-
-    Args:
-        user_address (str): The street address or specific location provided by the user.
-        city (str): The city name where the user is located.
-
-    Returns:
-        str: Result of the tool.
+    Tính khoảng cách (km) giữa 2 toạ độ bằng công thức Haversine.
     """
-    url = f"https://geocode.search.hereapi.com/v1/geocode?q={user_address}+{city}&apiKey=A7V_JCsxV2Y_A_WBg00q_mUB-bDCynwEhwaZeT6QfwY&limit=1"
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = json.loads(response.content.decode('utf-8-sig'))
-        res = data["items"][0]
-        city_id = CITY_IDS.get(res['address']['county'])
-        if city_id is None:
-            return "Không tìm thấy thành phố phù hợp. Vui lòng thử lại."
+    R = 6371.0  # bán kính Trái Đất (km)
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
 
-        lat_lon = res['position']
-        near_salon = {'city_id': city_id, 'lat': lat_lon['lat'], 'lon': lat_lon['lng']}
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+@tool
+def get_near_salon(user_address: str, city: str = "Hà Nội") -> str:
+    """Tìm và gợi ý salon 30Shine gần nhất dựa trên địa chỉ và thành phố của khách."""
+    addr_lower = user_address.lower()
+    if "ba đình" in addr_lower or "ba dinh" in addr_lower:
+        user_lat, user_lon = 21.0333, 105.8278
+    elif "hoàn kiếm" in addr_lower or "hoan kiem" in addr_lower:
+        user_lat, user_lon = 21.0285, 105.8542
+    elif "tây hồ" in addr_lower or "tay ho" in addr_lower:
+        user_lat, user_lon = 21.0645, 105.8230
+    else:
+        # Toạ độ trung tâm Hà Nội mặc định (giả)
+        user_lat, user_lon = 21.0278, 105.8342
 
-        url_get_all_salon = "https://storage.30shine.com/web/v3/configs/get_all_salon.json"
-        response = requests.get(url_get_all_salon, timeout=5)
-        response.raise_for_status()
-        data = json.loads(response.content.decode('utf-8-sig'))
+    # === Bước 2: Danh sách salon giả (mock data)
+    salons = [
+        {"id": 1, "name": "Salon Hoa Mai", "address": "Số 10, Quận Hoàn Kiếm, Hà Nội", "lat": 21.0290, "lon": 105.8536,
+         "rating": 4.6},
+        {"id": 2, "name": "Hair Studio 88", "address": "Khu vực Ba Đình, Hà Nội", "lat": 21.0340, "lon": 105.8285,
+         "rating": 4.4},
+        {"id": 3, "name": "Tóc & Spa Tây Hồ", "address": "Tây Hồ, Hà Nội", "lat": 21.0630, "lon": 105.8210,
+         "rating": 4.2},
+        {"id": 4, "name": "Salon Minh Châu", "address": "Hai Bà Trưng, Hà Nội", "lat": 21.0125, "lon": 105.8532,
+         "rating": 4.1},
+        {"id": 5, "name": "Barber Street", "address": "Cầu Giấy, Hà Nội", "lat": 21.0295, "lon": 105.7836,
+         "rating": 4.3},
+        {"id": 6, "name": "Salon Gội Đầu Thư Giãn", "address": "Đống Đa, Hà Nội", "lat": 21.0115, "lon": 105.8467,
+         "rating": 4.0},
+    ]
 
-        salons = [x for x in data["data"] if x["cityId"] == near_salon['city_id']]
-        salons.sort(
-            key=lambda x: euclidean_distance(
-                near_salon['lat'], near_salon['lon'], x['latitude'], x['longitude']
-            )
-        )
+    # === Bước 3: Tính khoảng cách và lọc/sắp xếp
+    results = []
+    for s in salons:
+        dist_km = _haversine(user_lat, user_lon, s["lat"], s["lon"])
+        s_copy = s.copy()
+        s_copy["distance_km"] = round(dist_km, 3)
+        results.append(s_copy)
 
-        if not salons:
-            return "Không tìm thấy salon nào gần khu vực của bạn."
+    # Lọc: chỉ trả salon trong bán kính 8 km (giá trị giả), sắp xếp theo khoảng cách tăng dần
+    max_radius_km = 8.0
+    nearby = [r for r in results if r["distance_km"] <= max_radius_km]
+    nearby.sort(key=lambda x: x["distance_km"])
 
-        list_salon = "Danh sách salon\n" + "\n".join(
-            f"- **{x['addressNew']}**" for x in salons[:5]
-        )
-        return list_salon
-    except (requests.RequestException, json.JSONDecodeError, KeyError):
-        return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+    # Nếu không tìm thấy salon nào trong radius, trả về top 3 gần nhất (fallback)
+    if not nearby:
+        results.sort(key=lambda x: x["distance_km"])
+        nearby = results[:3]
+
+    # === Bước 4: Đóng gói JSON trả về (chuỗi)
+    output = {
+        "query_address": user_address,
+        "city": city,
+        "user_coord": {"lat": user_lat, "lon": user_lon},
+        "count": len(nearby),
+        "salons": nearby
+    }
+    return json.dumps(output, ensure_ascii=False, indent=2)
 
 
 @tool(parse_docstring=True)
@@ -108,18 +180,18 @@ def check_availability(salon_address: str, date: str, time: str):
     Returns:
         str: Result of the tool.
     """
-    import random
-    random_slot = random.random()
-    fmt = "%H:%M"
-    time_obj = datetime.strptime(time, fmt)
-
-    if random_slot < 0.1:
-        # Lấy thời gian trước và sau 20 phút
-        time_before = time_obj - timedelta(minutes=20)
-        time_after = time_obj + timedelta(minutes=20)
-        return f"Ở {salon_address} ngày {date} lúc {time} đã hết slot. Hai khung giờ gần nhất còn slot là {time_before.strftime(fmt)} và {time_after.strftime(fmt)}"
-    else:
-        return f"Ở {salon_address} ngày {date} lúc {time} còn slot"
+    # import random
+    # random_slot = random.random()
+    # fmt = "%H:%M"
+    # time_obj = datetime.strptime(time, fmt)
+    #
+    # if random_slot < 0.1:
+    #     # Lấy thời gian trước và sau 20 phút
+    #     time_before = time_obj - timedelta(minutes=20)
+    #     time_after = time_obj + timedelta(minutes=20)
+    #     return f"Ở {salon_address} ngày {date} lúc {time} đã hết slot. Hai khung giờ gần nhất còn slot là {time_before.strftime(fmt)} và {time_after.strftime(fmt)}"
+    # else:
+    return f"Ở {salon_address} ngày {date} lúc {time} còn slot"
     # # Get salon id
     # url = f"https://storage.30shine.com/web/v3/configs/get_all_salon.json?"
     # try:

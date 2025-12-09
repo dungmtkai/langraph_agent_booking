@@ -1,4 +1,4 @@
-import os
+import math
 import json
 import requests
 from datetime import datetime, timedelta
@@ -25,55 +25,107 @@ load_dotenv()
 
 # ========================= CONFIG =========================
 CITY_IDS = {
-    'Hà Nội': 62, 'Hồ Chí Minh': 1, 'Đà Nẵng': 60, 'Hải Phòng': 59,
-    'Cần Thơ': 61, 'Đồng Nai': 42, 'Bình Dương': 50, 'Thủ Đức': 1,
-    # … thêm nếu cần
+    'Hà Giang': 0,
+    'Thủ Đức': 1,
+    'Hồ Chí Minh': 1,
+    'Tiền Giang': 7,
+    'Thanh Hóa': 9,
+    'Thái Nguyên': 10,
+    'Quảng Ninh': 16,
+    'Nghệ An': 24,
+    'Long An': 26,
+    'Khánh Hòa': 33,
+    'Hà Tĩnh': 38,
+    'Đồng Nai': 42,
+    'Bình Thuận': 48,
+    'Bình Dương': 50,
+    'Bình Định': 51,
+    'Bắc Ninh': 53,
+    'Bà Rịa - Vũng Tàu': 57,
+    'An Giang': 58,
+    'Hải Phòng': 59,
+    'Đà Nẵng': 60,
+    'Cần Thơ': 61,
+    'Hà Nội': 62
 }
 
 # ========================= TOOLS =========================
+
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Tính khoảng cách (km) giữa 2 toạ độ bằng công thức Haversine.
+    """
+    R = 6371.0  # bán kính Trái Đất (km)
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 @tool
 def get_near_salon(user_address: str, city: str = "Hà Nội") -> str:
     """Tìm và gợi ý salon 30Shine gần nhất dựa trên địa chỉ và thành phố của khách."""
-    url = f"https://geocode.search.hereapi.com/v1/geocode?q={user_address}+{city}&apiKey=A7V_JCsxV2Y_A_WBg00q_mUB-bDCynwEhwaZeT6QfwY&limit=1"
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = json.loads(response.content.decode('utf-8-sig'))
-        res = data["items"][0]
-        city_id = CITY_IDS.get(res['address']['county'])
-        if city_id is None:
-            return "Không tìm thấy thành phố phù hợp. Vui lòng thử lại."
+    addr_lower = user_address.lower()
+    if "ba đình" in addr_lower or "ba dinh" in addr_lower:
+        user_lat, user_lon = 21.0333, 105.8278
+    elif "hoàn kiếm" in addr_lower or "hoan kiem" in addr_lower:
+        user_lat, user_lon = 21.0285, 105.8542
+    elif "tây hồ" in addr_lower or "tay ho" in addr_lower:
+        user_lat, user_lon = 21.0645, 105.8230
+    else:
+        # Toạ độ trung tâm Hà Nội mặc định (giả)
+        user_lat, user_lon = 21.0278, 105.8342
 
-        lat_lon = res['position']
-        near_salon = {'city_id': city_id, 'lat': lat_lon['lat'], 'lon': lat_lon['lng']}
+    # === Bước 2: Danh sách salon giả (mock data)
+    salons = [
+        {"id": 1, "name": "Salon Hoa Mai", "address": "Số 10, Quận Hoàn Kiếm, Hà Nội", "lat": 21.0290, "lon": 105.8536,
+         "rating": 4.6},
+        {"id": 2, "name": "Hair Studio 88", "address": "Khu vực Ba Đình, Hà Nội", "lat": 21.0340, "lon": 105.8285,
+         "rating": 4.4},
+        {"id": 3, "name": "Tóc & Spa Tây Hồ", "address": "Tây Hồ, Hà Nội", "lat": 21.0630, "lon": 105.8210,
+         "rating": 4.2},
+        {"id": 4, "name": "Salon Minh Châu", "address": "Hai Bà Trưng, Hà Nội", "lat": 21.0125, "lon": 105.8532,
+         "rating": 4.1},
+        {"id": 5, "name": "Barber Street", "address": "Cầu Giấy, Hà Nội", "lat": 21.0295, "lon": 105.7836,
+         "rating": 4.3},
+        {"id": 6, "name": "Salon Gội Đầu Thư Giãn", "address": "Đống Đa, Hà Nội", "lat": 21.0115, "lon": 105.8467,
+         "rating": 4.0},
+    ]
 
-        url_get_all_salon = "https://storage.30shine.com/web/v3/configs/get_all_salon.json"
-        response = requests.get(url_get_all_salon, timeout=5)
-        response.raise_for_status()
-        data = json.loads(response.content.decode('utf-8-sig'))
+    # === Bước 3: Tính khoảng cách và lọc/sắp xếp
+    results = []
+    for s in salons:
+        dist_km = _haversine(user_lat, user_lon, s["lat"], s["lon"])
+        s_copy = s.copy()
+        s_copy["distance_km"] = round(dist_km, 3)
+        results.append(s_copy)
 
-        salons = [x for x in data["data"] if x["cityId"] == near_salon['city_id']]
-        salons.sort(
-            key=lambda x: euclidean_distance(
-                near_salon['lat'], near_salon['lon'], x['latitude'], x['longitude']
-            )
-        )
+    # Lọc: chỉ trả salon trong bán kính 8 km (giá trị giả), sắp xếp theo khoảng cách tăng dần
+    max_radius_km = 8.0
+    nearby = [r for r in results if r["distance_km"] <= max_radius_km]
+    nearby.sort(key=lambda x: x["distance_km"])
 
-        if not salons:
-            return "Không tìm thấy salon nào gần khu vực của bạn."
+    # Nếu không tìm thấy salon nào trong radius, trả về top 3 gần nhất (fallback)
+    if not nearby:
+        results.sort(key=lambda x: x["distance_km"])
+        nearby = results[:3]
 
-        list_salon = "Danh sách salon\n" + "\n".join(
-            f"- **{x['addressNew']}**" for x in salons[:5]
-        )
-        return list_salon
-    except (requests.RequestException, json.JSONDecodeError, KeyError):
-        return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+    # === Bước 4: Đóng gói JSON trả về (chuỗi)
+    output = {
+        "query_address": user_address,
+        "city": city,
+        "user_coord": {"lat": user_lat, "lon": user_lon},
+        "count": len(nearby),
+        "salons": nearby
+    }
+    return json.dumps(output, ensure_ascii=False, indent=2)
 
 @tool
 def check_availability(salon_address: str, date: str, time: str) -> str:
     """Kiểm tra xem khung giờ tại salon có còn trống không."""
-    if random() < 0.15:
-        return f"Slot {time} ngày {date} tại {salon_address} đã hết ạ. Gần nhất còn: 09:00 và 10:00"
+    # if random() < 0.15:
+    #     return f"Slot {time} ngày {date} tại {salon_address} đã hết ạ. Gần nhất còn: 09:00 và 10:00"
     return f"Slot {time} ngày {date} tại {salon_address} còn trống ạ!"
 
 @tool
