@@ -1,0 +1,280 @@
+from langchain.agents import AgentExecutor
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
+
+from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV2, SUPERVISOR_SYSTEM_PROMPTV4, valid_system_prompt
+from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, \
+    get_info
+from dotenv import load_dotenv
+from langgraph.graph import END
+from typing import Annotated, TypedDict, Literal, Any, Optional, List
+from langgraph.graph import StateGraph, START
+from langgraph.types import Command
+from datetime import datetime
+
+load_dotenv()
+from langgraph.graph.message import add_messages, MessagesState
+
+from pydantic import BaseModel, Field
+
+next_des = ("Determines which specialist to activate next in the workflow sequence:"
+            "'booking_node' Hỗ trợ khách hàng trong việc đặt lịch hoặc thay đổi lịch hẹn (không bao gồm email hoặc tên), kiểm tra các khung giờ còn trống tại salon, tìm salon gần nhất và hiển thị các chi nhánh salon. Giao các nhiệm vụ liên quan đến đặt lịch cho trợ lý này."
+            "'information_node' Cung cấp thông tin tư vấn chi tiết cho khách hàng về các dịch vụ của 30Shine, bảng giá, nhân viên, so sánh giữa các salon, gói combo, tiện ích và chỗ đỗ xe tại cả salon thường và salon cao cấp. Giao các nhiệm vụ liên quan đến câu hỏi thường gặp (FAQ) cho trợ lý này."
+            )
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list[Any], add_messages]
+    query: str
+    chat_history: Annotated[list[Any], add_messages]
+    task: str
+    completed_task: List
+
+
+class Action(BaseModel):
+    name: str = Field(description="The name of the agent")
+    query: str = Field(description="The specific query for the agent")
+
+
+class AgentRequest(BaseModel):
+    thought: str = Field(description="Your reasoning about what to do next")
+    action: List[Action] = Field(description="List of actions with agent names and their queries")
+
+
+# class Router(BaseModel):
+#     next: Literal["information_node", "booking_node", "fallback_node", "FINISH"] = Field(description="the next agent")
+#     reason: str = Field(
+#         description="Detailed justification for the routing decision, explaining the rationale behind selecting the particular specialist and how this advances the task toward completion."
+#     )
+#     task: str = Field(description="Mô tả nhiệm vụ chính được giao cho next agent thực hiện")
+
+
+current_date = datetime.now()
+
+openai_model = ChatOpenAI(model="gpt-4o-mini")
+
+members_dict = {
+    'booking_node': 'Hỗ trợ khách hàng trong việc đặt lịch hoặc thay đổi lịch hẹn (không bao gồm email hoặc tên), kiểm tra các khung giờ còn trống tại salon, tìm salon gần nhất và hiển thị các chi nhánh salon. Giao các nhiệm vụ liên quan đến đặt lịch cho trợ lý này.',
+    'information_node': 'Cung cấp thông tin tư vấn chi tiết cho khách hàng về các dịch vụ của 30Shine, bảng giá, nhân viên, so sánh giữa các salon, gói combo, tiện ích và chỗ đỗ xe tại cả salon thường và salon cao cấp. Giao các nhiệm vụ liên quan đến câu hỏi thường gặp (FAQ) cho trợ lý này.'}
+
+worker_info = '\n\n'.join([f'WORKER: {member} \nDESCRIPTION: {description}' for member, description in
+                           members_dict.items()])
+
+
+def booking_node(state: AgentState) -> Command[Literal['supervisor']]:
+    print("*****************called booking node************")
+
+    system_prompt = BOOKING_SYSTEM_PROMPT.format(date_time=current_date)
+
+    system_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                system_prompt
+            ),
+            (
+                "placeholder",
+                "{messages}"
+            ),
+        ]
+    )
+    booking_agent = create_react_agent(model=openai_model,
+                                       tools=[book_appointment, cancel_appointment, check_availability, get_near_salon,
+                                              list_branches],
+                                       version="v2", debug=True,
+                                       prompt=system_prompt)
+
+    query_part = [
+        HumanMessage(content=state["query"])
+    ]
+
+    input_for_agent = {"messages": state["chat_history"] + query_part}
+    print(f"______________input for booking_node_______________:{input_for_agent}")
+    result = booking_agent.invoke(input_for_agent)
+
+    if not state.get("completed_task"):
+        complete_task = [state["task"]]
+    else:
+        complete_task = state.get("completed_task", []).append([state["task"]])
+
+    print("++++++++++++++++++", complete_task)
+
+    return Command(
+        update={
+            "messages": [
+                AIMessage(
+                    content=result["messages"][-1].content,
+                    name="booking_node"
+                )
+            ],
+            "completed_task": complete_task
+        },
+        goto="supervisor",
+    )
+
+
+def fallback_node(state: AgentState) -> Command[Literal['supervisor']]:
+    print("*****************called fallback node************")
+
+    system_prompt = BOOKING_SYSTEM_PROMPT.format(date_time=current_date)
+
+    system_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """Bạn là Janie, trợ lý ảo tư vấn và chăm sóc khách hàng của 30Shine, một chuỗi salon và hairdressing dành cho nam giới và trẻ nhỏ.
+Bạn có khả năng:
+- Hỗ trợ khách hàng đặt lịch/sửa lịch (đặt lịch dựa trên số điện thoại, không dựa theo email, tên tuổi)
+- Kiểm tra khung giờ còn trống tại các salon.
+- Cung cấp danh sách các salon theo hạng (thường hoặc thương gia).
+- Tìm địa chỉ hoặc gợi ý salon gần nhất dựa trên vị trí khách hàng cung cấp.
+- Cung cấp các thông tin chi nhánh, cơ sở, salon của 30shine
+- Tư vấn khách hàng về sản phẩm, dịch vụ, giá cả, chương trình ưu đãi, và combo liên quan.
+- Cung cấp thông tin về nhân viên làm việc tại salon là nam hay nữ
+- Thông tin, so sánh các salon, thời gian phục vụ và các tiện ích khác
+- Tư vấn các dịch vụ cắt tóc, gội đầu, nhuộm tóc, chăm sóc tóc, massage cổ vai gáy và full body, chăm sóc da mặt, lấy ráy tay, kiểu tóc, tình trạng tóc...và combo liên quan đến cả 2 salon thường và salon thương gia của 30Shine. Nếu khách hỏi combo cùng có ở cả 2 salon thường và salon thương gia thì đưa ra cả 2 cho khách lựa chọn
+- Tư vấn cung cấp các thông tin liên quan đến chỗ đỗ xe, chỗ để xe ô tô, bị phạt hay an toàn ...
+- Tư vấn thông tin về bãi đỗ xe liên quan tới các địa chỉ tại salon 30 Shine.
+Hãy trả lời câu hỏi của người dùng
+"""
+
+            ),
+            (
+                "placeholder",
+                "{messages}"
+            ),
+        ]
+    )
+    booking_agent = create_react_agent(model=openai_model,
+                                       prompt=system_prompt, tools=[])
+
+    query_part = [
+        HumanMessage(content=state["query"])
+    ]
+
+    input_for_agent = {"messages": state["chat_history"] + query_part}
+    print(f"______________input for fallback_node_______________:{input_for_agent}")
+    result = booking_agent.invoke(input_for_agent)
+    if not state.get("completed_task"):
+        complete_task = [state["task"]]
+    else:
+        complete_task = state.get("completed_task", []).append([state["task"]])
+    return Command(
+        update={
+            "messages": [
+                AIMessage(
+                    content=result["messages"][-1].content,
+                    name="fallback_node"
+                )
+            ],
+            "completed_task": complete_task
+        },
+        goto="supervisor",
+    )
+
+
+def information_node(state: AgentState) -> Command[Literal['supervisor']]:
+    print("*****************called information node************")
+
+    system_prompt = (
+        "You are a faq agent.\n\n"
+        "INSTRUCTIONS:\n"
+        "- You are a consultant specializing in services and information related to the 30Shine men's haircut system. "
+        "- After you're done with your tasks, respond to the supervisor directly\n"
+        "- Respond ONLY with the results of your work, do NOT include ANY other text."
+        "- Chỉ được phép dùng duy nhất 1 tool sau đó handoff cho validation"
+        "Phong cách phản hồi:"
+        "Thân thiện và gần gũi, xưng là “Janie” hoặc dùng “em” với giọng nhẹ nhàng."
+        "Gọi khách hàng là “anh”."
+        "Giữ giọng văn nhẹ nhàng, dễ thương, tránh dùng từ “nhé”."
+        "Luôn kết thúc câu bằng từ “ạ”."
+    )
+
+    system_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                system_prompt
+            ),
+            (
+                "placeholder",
+                "{messages}"
+            ),
+        ]
+    )
+
+    information_agent = create_react_agent(model=openai_model, tools=[get_info, get_near_salon, list_branches],
+                                           prompt=system_prompt, version="v2")
+    query_part = [
+        HumanMessage(content=state["query"])
+    ]
+    input_for_agent = {"messages": state["chat_history"] + query_part}
+    print(f"______________input for information_node_______________:{input_for_agent}")
+
+    result = information_agent.invoke(input_for_agent)
+    if not state.get("completed_task"):
+        complete_task = [state["task"]]
+    else:
+        complete_task = state.get("completed_task", []).append([state["task"]])
+
+    return Command(
+        update={
+            "messages": [
+                AIMessage(
+                    content=result["messages"][-1].content,
+                    name="information_node"
+                )
+            ],
+            "completed_task": complete_task
+        },
+        goto="supervisor",
+    )
+
+
+def supervisor_node(state: AgentState) -> Command[
+    Literal['information_node', 'booking_node', "fallback_node", "__end__"]]:
+    print("**************************below is my state right after entering****************************")
+    user_query = [
+        HumanMessage(content=state["query"])
+    ]
+    print("======================", SUPERVISOR_SYSTEM_PROMPTV4.format(completed_task=state.get("completed_task", [])))
+    messages = [{"role": "system",
+                 "content": SUPERVISOR_SYSTEM_PROMPTV4.format(completed_task=state.get("completed_task", ""))}] + state[
+                   "chat_history"] + [
+                   state["messages"][-1]] + user_query
+
+    print(f"______________chat history___________________: \n{state['chat_history']}")
+
+    response = openai_model.with_structured_output(AgentRequest).invoke(messages)
+
+    print("response===========", response)
+
+    goto = response.action[0].name
+
+    print(f"--- Workflow Transition: Supervisor → {goto.upper()} ---")
+    if goto == "FINISH" or goto == END:
+        goto = END
+        print(" --- Transitioning to END ---")
+        print(response.answer)
+        return Command(goto=goto, update={'next': goto,
+                                          'messages': [AIMessage(content=response.answer)]})
+    else:
+
+        return Command(
+            goto=goto,
+            update={"task": response.action[0].query}
+        )
+
+
+graph = StateGraph(AgentState)
+graph.add_node("supervisor", supervisor_node)
+graph.add_node("information_node", information_node)
+graph.add_node("fallback_node", fallback_node)
+graph.add_node("booking_node", booking_node)
+graph.add_edge(START, "supervisor")
+app = graph.compile()
