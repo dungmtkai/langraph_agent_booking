@@ -10,3 +10,8 @@ wheels/
 .venv
 .idea
 .env
+/.claude/
+/.opencode/
+/plans/
+/AGENTS.md
+/CLAUDE.md
