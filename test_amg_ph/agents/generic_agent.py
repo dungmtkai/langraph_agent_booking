@@ -6,9 +6,9 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 
-from .settings import AgentSetting, get_agent_setting
-from .state import AgentState
-from .schemas import AgentPlan
+from .generic_agent_settings import AgentSetting, get_agent_setting
+from .state import GenericAgentState
+from .schemas import GenericAgentPlan
 from .prompts import (
     get_tool_descriptions,
     render_description,
@@ -57,7 +57,7 @@ class GenericAgent:
             raise ValueError(f"Agent with id {agent_id} not found")
         return cls(setting=setting, **kwargs)
 
-    def planner(self, state: AgentState) -> dict:
+    def planner(self, state: GenericAgentState) -> dict:
         messages = state["messages"]
         system_prompt = create_planner_system_prompt(
             description=render_description(self.setting.description, self.user_info),
@@ -71,12 +71,12 @@ class GenericAgent:
             ("placeholder", "{messages}")
         ])
 
-        chain = prompt | self.llm.with_structured_output(AgentPlan, method="function_calling")
+        chain = prompt | self.llm.with_structured_output(GenericAgentPlan, method="function_calling")
 
         try:
-            plan: AgentPlan = chain.invoke({"messages": messages})
+            plan: GenericAgentPlan = chain.invoke({"messages": messages})
         except Exception:
-            plan = AgentPlan(
+            plan = GenericAgentPlan(
                 thought="Lỗi parse, cần hỏi lại",
                 next_action="ask_user",
                 response="Dạ anh ơi, em chưa hiểu lắm, anh nói rõ hơn được không ạ?"
@@ -89,7 +89,7 @@ class GenericAgent:
             "pending_tools": pending_tools
         }
 
-    def tool_executor(self, state: AgentState) -> dict:
+    def tool_executor(self, state: GenericAgentState) -> dict:
         pending_tools = state.get("pending_tools", [])
         messages = state["messages"]
 
@@ -147,7 +147,7 @@ class GenericAgent:
             "pending_tools": []
         }
 
-    def responder(self, state: AgentState) -> dict:
+    def responder(self, state: GenericAgentState) -> dict:
         plan = state.get("plan", {})
         response = plan.get("response", "")
 
@@ -162,7 +162,7 @@ class GenericAgent:
 
         return {"messages": [AIMessage(content=text, name=self.setting.name)]}
 
-    def router(self, state: AgentState) -> str:
+    def router(self, state: GenericAgentState) -> str:
         plan = state.get("plan", {})
         next_action = plan.get("next_action", "respond")
 
@@ -174,7 +174,7 @@ class GenericAgent:
         if self._graph is not None:
             return self._graph
 
-        g = StateGraph(AgentState)
+        g = StateGraph(GenericAgentState)
 
         g.add_node("planner", self.planner)
         g.add_node("tool_executor", self.tool_executor)
@@ -199,35 +199,3 @@ class GenericAgent:
             "plan": {},
             "pending_tools": []
         }, **kwargs)
-
-
-def create_absence_request_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(159, **kwargs)
-
-
-def create_daily_report_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(160, **kwargs)
-
-
-def create_feedback_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(161, **kwargs)
-
-
-def create_get_submitted_ticket_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(162, **kwargs)
-
-
-def create_learning_schedule_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(163, **kwargs)
-
-
-def create_meal_info_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(164, **kwargs)
-
-
-def create_medication_instruction_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(165, **kwargs)
-
-
-def create_pickup_authorization_agent(**kwargs) -> GenericAgent:
-    return GenericAgent.from_id(166, **kwargs)

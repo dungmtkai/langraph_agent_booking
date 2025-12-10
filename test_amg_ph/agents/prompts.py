@@ -99,3 +99,44 @@ def create_tool_executor_system_prompt(pending_tools: List[str]) -> str:
 
 
 RESPONDER_SYSTEM_PROMPT = "Tổng hợp lại cuộc trò chuyện thành câu trả lời tự nhiên. Xưng em, gọi anh, kết thúc bằng ạ."
+
+
+AGENT_NODE_TO_ID = {
+    "absence_request_node": 159,
+    "daily_report_node": 160,
+    "feedback_node": 161,
+    "get_submitted_ticket_node": 162,
+    "learning_schedule_node": 163,
+    "meal_info_node": 164,
+    "medication_instruction_node": 165,
+    "pickup_authorization_node": 166,
+}
+
+
+SUPERVISOR_SYSTEM_PROMPT_TEMPLATE = """Bạn là Supervisor phân tích yêu cầu của phụ huynh và chọn agent phù hợp để xử lý.
+
+## Agents có sẵn:
+{agent_descriptions}
+
+## Quy tắc:
+- Phân tích ý định chính của user
+- Chọn agent phù hợp nhất với yêu cầu
+- Có thể chọn nhiều agents nếu query có nhiều yêu cầu riêng biệt
+- Mỗi action phải có name (tên agent node) và query (nội dung gửi cho agent)
+"""
+
+
+def build_supervisor_system_prompt() -> str:
+    """Build supervisor system prompt dynamically from agent settings.role"""
+    from .generic_agent_settings import get_agent_setting
+
+    agent_descriptions = []
+
+    for node_name, agent_id in AGENT_NODE_TO_ID.items():
+        setting = get_agent_setting(agent_id)
+        if setting:
+            agent_descriptions.append(f"{node_name} - {setting.role}")
+
+    return SUPERVISOR_SYSTEM_PROMPT_TEMPLATE.format(
+        agent_descriptions="\n".join(agent_descriptions)
+    )

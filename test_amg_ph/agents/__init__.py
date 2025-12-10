@@ -1,4 +1,4 @@
-from .settings import (
+from .generic_agent_settings import (
     AgentSetting,
     ModelConfig,
     LLMType,
@@ -15,18 +15,15 @@ from .settings import (
     get_agent_setting,
 )
 
-from .state import AgentState
+from .state import GenericAgentState, SupervisorState
 
-from .schemas import AgentPlan, ToolSelection
+from .schemas import GenericAgentPlan, ToolSelection, AGENT_NODE_NAMES, Action, SupervisorPlan
 
-from .generic_agent import (
-    GenericAgent,
-    create_absence_request_agent,
-    create_daily_report_agent,
-    create_feedback_agent,
-    create_get_submitted_ticket_agent,
-    create_learning_schedule_agent,
-    create_meal_info_agent,
-    create_medication_instruction_agent,
-    create_pickup_authorization_agent,
+from .supervisor_agent import (
+    AGENT_NODE_TO_ID,
+    build_supervisor_system_prompt,
+    group_tasks_by_agent,
+    create_supervisor_node,
+    create_agent_node,
+    build_workflow,
 )
