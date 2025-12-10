@@ -1,9 +1,8 @@
 from langchain_openai import ChatOpenAI
+from langchain_core.tools import StructuredTool
 from typing import Optional, Dict, Any, List
 from .settings import AgentSetting, get_agent_setting
-
-
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+from ..tools.tool_agent import create_langchain_tool
 
 
 class GenericAgent:
@@ -11,15 +10,21 @@ class GenericAgent:
         self,
         setting: AgentSetting,
         user_info: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Any]] = None
     ):
         self.setting = setting
         self.user_info = user_info or {}
-        self.tools = tools or []
+
+        self.tools: List[StructuredTool] = [
+            create_langchain_tool(tool_id) for tool_id in setting.tool_ids
+        ]
+
+        self.llm = ChatOpenAI(
+            model=setting.model_config.name,
+            temperature=setting.model_config.temperature
+        )
 
     @classmethod
     def from_id(cls, agent_id: int, **kwargs) -> "GenericAgent":
-        """Create agent from ID"""
         setting = get_agent_setting(agent_id)
         if not setting:
             raise ValueError(f"Agent with id {agent_id} not found")
