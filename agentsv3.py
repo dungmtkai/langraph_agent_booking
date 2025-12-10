@@ -1,10 +1,53 @@
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 memory = MemorySaver()
+
+
+# ============== HELPER: Log ReAct Steps ==============
+def log_react_steps(result, agent_name="Agent"):
+    """Log chi tiết reasoning, action, observation của ReAct agent"""
+    print(f"\n{'='*60}")
+    print(f"🔍 [{agent_name}] ReAct Flow Details")
+    print('='*60)
+
+    step = 0
+    for msg in result.get("messages", []):
+        msg_type = type(msg).__name__
+
+        # Human message (input)
+        if msg_type == "HumanMessage":
+            print(f"\n📥 INPUT: {msg.content[:200]}...")
+
+        # AI message (reasoning + action)
+        elif msg_type == "AIMessage":
+            step += 1
+            print(f"\n🧠 STEP {step} - REASONING & ACTION:")
+
+            # Content = reasoning/response
+            if msg.content:
+                print(f"   💭 Thought: {msg.content[:300]}{'...' if len(msg.content) > 300 else ''}")
+
+            # Tool calls = action
+            tool_calls = getattr(msg, 'tool_calls', None)
+            if tool_calls:
+                for tc in tool_calls:
+                    print(f"   🔧 Action: {tc.get('name', 'unknown')}")
+                    print(f"   📋 Args: {tc.get('args', {})}")
+            else:
+                print(f"   ✅ Final Response (no tool call)")
+
+        # Tool message (observation)
+        elif msg_type == "ToolMessage":
+            print(f"\n👁️  OBSERVATION:")
+            print(f"   Tool: {getattr(msg, 'name', 'unknown')}")
+            content = str(msg.content)
+            print(f"   Result: {content[:500]}{'...' if len(content) > 500 else ''}")
+
+    print(f"\n{'='*60}\n")
 
 from config import BOOKING_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPTV3, valid_system_prompt, SUPERVISOR_SYSTEM_PROMPTV4
 from tools import book_appointment, cancel_appointment, check_availability, get_near_salon, list_branches, \
@@ -53,7 +96,7 @@ class AgentRequest(BaseModel):
 
 current_date = datetime.now()
 
-openai_model = ChatOpenAI(model="gpt-4o-mini")
+openai_model = ChatOpenAI(model="gpt-4.1-mini")
 
 members_dict = {
     'booking_node': 'Hỗ trợ khách hàng trong việc đặt lịch hoặc thay đổi lịch hẹn (không bao gồm email hoặc tên), kiểm tra các khung giờ còn trống tại salon, tìm salon gần nhất và hiển thị các chi nhánh salon. Giao các nhiệm vụ liên quan đến đặt lịch cho trợ lý này.',
@@ -82,7 +125,8 @@ def booking_node(state: AgentState) -> Command[Literal['validator']]:
         ]
     )
     booking_agent = create_react_agent(model=openai_model,
-                                       tools=[book_appointment],
+                                       tools=[book_appointment, cancel_appointment, check_availability, get_near_salon,
+                                              list_branches],
                                        version="v2",
                                        prompt=system_prompt, debug=True)
 
@@ -93,6 +137,10 @@ def booking_node(state: AgentState) -> Command[Literal['validator']]:
     input_for_agent = {"messages": state["chat_history"] + query_part}
     print(f"______________input for booking_node_______________:{input_for_agent}")
     result = booking_agent.invoke(input_for_agent)
+
+    # Log ReAct steps
+    log_react_steps(result, "BOOKING_AGENT")
+
     for task in state["list_tasks"]:
         if task["name"] == "booking_node":
             task["status"] = "done"
@@ -154,6 +202,10 @@ Always respond in the same language as the user's input.
     input_for_agent = {"messages": state["chat_history"] + query_part}
     print(f"______________input for fallback_node_______________:{input_for_agent}")
     result = booking_agent.invoke(input_for_agent)
+
+    # Log ReAct steps
+    log_react_steps(result, "FALLBACK_AGENT")
+
     for task in state["list_tasks"]:
         if task["name"] == "fallback_node":
             task["status"] = "done"
@@ -213,6 +265,10 @@ def information_node(state: AgentState) -> Command[Literal['validator']]:
     print(f"______________input for information_node_______________:{input_for_agent}")
 
     result = information_agent.invoke(input_for_agent)
+
+    # Log ReAct steps
+    log_react_steps(result, "INFORMATION_AGENT")
+
     for task in state["list_tasks"]:
         if task["name"] == "information_node":
             task["status"] = "done"
