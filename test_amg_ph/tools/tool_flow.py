@@ -263,7 +263,7 @@ def run_leave_date(dates: List[str]) -> Dict[str, Any]:
 
     for date_str in dates:
         try:
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            date_obj = datetime.strptime(date_str, "%d/%m/%Y").date()
             if date_obj >= today:
                 valid_dates.append(date_str)
             else:
@@ -287,7 +287,7 @@ def run_medicine_date(dates: List[str]) -> Dict[str, Any]:
 
     for date_str in dates:
         try:
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            date_obj = datetime.strptime(date_str, "%d/%m/%Y").date()
             if date_obj >= today:
                 valid_dates.append(date_str)
             else:
@@ -311,7 +311,7 @@ def run_pickup_date(dates: List[str]) -> Dict[str, Any]:
 
     for date_str in dates:
         try:
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+            date_obj = datetime.strptime(date_str, "%d/%m/%Y").date()
             if date_obj >= today:
                 valid_dates.append(date_str)
             else:

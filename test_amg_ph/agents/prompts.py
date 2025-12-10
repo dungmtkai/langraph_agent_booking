@@ -37,7 +37,7 @@ def render_description(description_template: str, user_info: Optional[Dict[str, 
     return template.render(user_info=user_info or {})
 
 
-PLANNER_SYSTEM_PROMPT_TEMPLATE = """Today is: {current_time}
+PLANNER_SYSTEM_PROMPT_TEMPLATE = """Today is: {current_time} (format: DD/MM/YYYY HH:MM)
 {description}
 
 === EXECUTION RULES ===
@@ -81,7 +81,7 @@ def create_planner_system_prompt(
 TOOL_EXECUTOR_SYSTEM_PROMPT_TEMPLATE = """Bạn là assistant trích xuất thông tin từ cuộc hội thoại để gọi tools.
 Hãy phân tích cuộc hội thoại và gọi các tools phù hợp với thông tin có sẵn.
 
-Today is: {current_time}
+Today is: {current_time} (format: DD/MM/YYYY HH:MM)
 
 QUAN TRỌNG:
 - Bạn PHẢI gọi các tools sau: {pending_tools}

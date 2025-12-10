@@ -23,7 +23,7 @@ DEFAULT_USER_INFO = {
     "parentName": "Mai Thị Kim Dung",
     "relationship": "MOTHER",
     "childName": "Nguyễn Thị Mai",
-    "nickname": "Cháp",
+    "nickname": "Chíp",
     "className": "Chồi BU1",
     "teacherName": "Nguyễn Thị Hà",
 }
@@ -75,7 +75,8 @@ class GenericAgent:
 
         try:
             plan: GenericAgentPlan = chain.invoke({"messages": messages})
-        except Exception:
+        except Exception as e:
+            print(f"[PLANNER][{self.setting.name}] Error: {e}")
             plan = GenericAgentPlan(
                 thought="Lỗi parse, cần hỏi lại",
                 next_action="ask_user",
@@ -83,6 +84,14 @@ class GenericAgent:
             )
 
         pending_tools = [t.tool_name for t in plan.selected_tools] if plan.next_action == "call_tool" else []
+
+        print(f"\n[PLANNER][{self.setting.name}]")
+        print(f"  Thought: {plan.thought}")
+        print(f"  Next action: {plan.next_action}")
+        if pending_tools:
+            print(f"  Selected tools: {pending_tools}")
+        if plan.response:
+            print(f"  Response: {plan.response[:100]}...")
 
         return {
             "plan": plan.model_dump(),
@@ -125,13 +134,20 @@ class GenericAgent:
                     tool_args = tc['args']
                     tool_call_id = tc['id']
 
+                    print(f"\n[TOOL_EXECUTOR][{self.setting.name}]")
+                    print(f"  Calling: {tool_name}")
+                    print(f"  Args: {tool_args}")
+
                     if tool_name in self.tool_map:
                         try:
                             result = self.tool_map[tool_name].invoke(tool_args)
+                            print(f"  Result: {str(result)[:200]}...")
                         except Exception as e:
                             result = f"Lỗi khi gọi {tool_name}: {e}"
+                            print(f"  Error: {e}")
                     else:
                         result = f"Tool {tool_name} không tồn tại"
+                        print(f"  Error: Tool not found")
 
                     new_messages.append(ToolMessage(
                         content=str(result),
@@ -139,7 +155,8 @@ class GenericAgent:
                         name=tool_name
                     ))
 
-        except Exception:
+        except Exception as e:
+            print(f"[TOOL_EXECUTOR][{self.setting.name}] Error: {e}")
             new_messages = []
 
         return {
