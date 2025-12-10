@@ -130,6 +130,7 @@ Think step by step:
 
 Note:
 Always respond in the same language as the user's input.
+Không được trả về action rỗng
 '''
 valid_system_prompt = '''Nhiệm vụ của bạn là đảm bảo chất lượng hợp lý.
 Nếu câu trả lời đã đáp ứng được ý định cốt lõi của câu hỏi, dù chưa hoàn hảo, thì hãy kết thúc quy trình bằng cách phản hồi 'FINISH'.

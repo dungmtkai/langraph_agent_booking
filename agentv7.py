@@ -1,17 +1,24 @@
+"""
+AgentV7: Hybrid Parallel Tool Calling + Supervisor Task Grouping
+
+Improvements over V5:
+1. ✨ Parallel tool calling: Agent can call multiple independent tools at once
+2. ✨ Supervisor task grouping: Same agent tasks merged with original query
+3. 🚀 Better performance: Reduced LLM calls for independent operations
+"""
+
 import json
 import requests
 from datetime import datetime
 from random import random
-import uuid
-
-from config import SUPERVISOR_SYSTEM_PROMPTV4
 from utils import euclidean_distance
 from typing import TypedDict, Annotated, Literal, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
@@ -28,10 +35,7 @@ load_dotenv()
 CITY_IDS = {
     'Hà Nội': 62, 'Hồ Chí Minh': 1, 'Đà Nẵng': 60, 'Hải Phòng': 59,
     'Cần Thơ': 61, 'Đồng Nai': 42, 'Bình Dương': 50, 'Thủ Đức': 1,
-    # … thêm nếu cần
 }
-
-# ========================= TOOLS =========================
 import math
 import json
 from typing import List, Dict
@@ -110,8 +114,8 @@ def get_near_salon(user_address: str, city: str = "Hà Nội") -> str:
 @tool
 def check_availability(salon_address: str, date: str, time: str) -> str:
     """Kiểm tra xem khung giờ tại salon có còn trống không."""
-    # if random() < 0.15:
-    #     return f"Slot {time} ngày {date} tại {salon_address} đã hết ạ. Gần nhất còn: 09:00 và 10:00"
+    if random() < 0.15:
+        return f"Slot {time} ngày {date} tại {salon_address} đã hết ạ. Gần nhất còn: 09:00 và 10:00"
     return f"Slot {time} ngày {date} tại {salon_address} còn trống ạ!"
 
 @tool
@@ -140,264 +144,267 @@ def get_info() -> str:
         "Anh cần tư vấn thêm gì không ạ?"
     )
 
+
+# ========================= SCHEMA V7 (NEW) =========================
 from langchain_core.utils.function_calling import convert_to_openai_tool
-# Đầu tiên: chuyển tất cả tool thành định dạng OpenAI tool spec
-booking_tool_specs = [
-    convert_to_openai_tool(t) for t in [
-        get_near_salon,
-        check_availability,
-        book_appointment,
-        cancel_appointment,
-        list_branches,
-    ]
-]
 
-# Tạo chuỗi mô tả tool đẹp để nhét vào prompt
-TOOLS_DESCRIPTION = "\n".join([
-    f"- {tool['function']['name']}: {tool['function']['description']}"
-    for tool in booking_tool_specs
-])
-
-# Prompt cuối cùng – LLM biết rõ mình có gì
-BOOKING_SYSTEM_PROMPT_WITH_TOOLS = f"""
-Today is: {{date_time}}
-
-Bạn là Janie – trợ lý đặt lịch siêu thông minh của 30Shine.
-Bạn chỉ được phép gọi tool nếu cần thiết, và chỉ gọi đúng 1 tool mỗi lần.
-
-=== DANH SÁCH TOOL BẠN CÓ THỂ DÙNG ===
-{TOOLS_DESCRIPTION}
-
-QUY TẮC BẮT BUỘC:
-- Nếu thiếu thông tin (địa chỉ, ngày, giờ, số điện thoại) → để vào missing_info, KHÔNG gọi tool
-- Nếu cần tìm salon → gọi get_near_salon
-- Nếu cần kiểm tra slot → gọi check_availability (phải có salon_address)
-- Nếu đủ thông tin và khách xác nhận → gọi book_appointment
-- Nếu khách muốn hủy → gọi cancel_appointment
-- Chỉ trả về đúng schema BookingPlan, không thêm text thừa.
-
-Phong cách: xưng em, gọi anh, kết thúc bằng “ạ”.
-"""
-
-SUPERVISOR_SYSTEM_PROMPT = """
-Bạn là Supervisor điều phối 2 agent chuyên biệt:
-
-booking_node → Đặt lịch, hủy lịch, check slot, tìm salon gần nhất
-information_node → Tư vấn giá, dịch vụ, combo, tiện ích, chỗ để xe, v.v.
-
-Phân tích query và trả về đúng JSON theo schema.
-"""
-
-
-
-
-# ========================= CUSTOM BOOKING AGENT (thông minh + sequential) =========================
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
-
-# Danh sách tool
-booking_tools = [get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches]
-
-
-class BookingState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    plan: dict  # Lưu plan hiện tại từ planner
-
-
-# Schema cho Plan - LLM sẽ output theo format này
-class ToolCall(BaseModel):
-    tool_name: str = Field(description="Tên tool cần gọi (phải chính xác)")
-    tool_args: dict = Field(default={}, description="Arguments cho tool")
-
-
-class BookingPlan(BaseModel):
-    thought: str = Field(description="Phân tích đã có gì thiếu gì và cần làm gì tiếp theo (tối đa 2 câu)")
-    # analysis: str = Field(description="Phân tích TÓM TẮT (tối đa 2 câu): có gì + thiếu gì")
-    next_action: Literal["call_tool", "ask_user", "respond"] = Field(
-        description="Hành động tiếp theo: call_tool (gọi tool), ask_user (hỏi thêm), respond (trả lời)"
-    )
-    tool_call: ToolCall | None = Field(default=None, description="Thông tin tool cần gọi (nếu next_action=call_tool)")
-    response: str = Field(default="", description="Câu trả lời cho user (nếu next_action=ask_user hoặc respond)")
-
-
-# Hàm an toàn để lấy tên + tham số + description
 def safe_tool_description(tool_func):
-    # Lấy tên tool một cách an toàn (hỗ trợ cả function và StructuredTool)
+    """Generate safe tool description for prompts"""
     tool_name = getattr(tool_func, 'name', None) or getattr(tool_func, '__name__', str(tool_func))
-
     try:
         spec = convert_to_openai_tool(tool_func)
         func = spec.get('function', {})
         name = func.get('name', tool_name)
         desc = func.get('description', 'No description')
-
-        # Safe param extraction
         params = func.get('parameters', {})
         props = params.get('properties', {})
         if not props:
             param_str = "no params"
         else:
-            param_parts = []
-            for pname, pinfo in props.items():
-                ptype = pinfo.get('type', 'any')
-                param_parts.append(f"{pname}: {ptype}")
+            param_parts = [f"{pname}: {pinfo.get('type', 'any')}" for pname, pinfo in props.items()]
             param_str = ", ".join(param_parts)
-
         return f"• {name}({param_str}) → {desc}"
     except Exception as e:
         print(f"Tool desc error for {tool_name}: {e}")
         return f"• {tool_name}(params unknown) → Tool for {tool_name}"
 
 
-# Generate TOOL_DESCRIPTIONS (gọi 1 lần ngoài hàm)
-# booking_tools = [get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches]
+class ToolCall(BaseModel):
+    """Single tool call specification"""
+    tool_name: str = Field(description="Tên tool cần gọi (phải chính xác)")
+    tool_args: dict = Field(default_factory=dict, description="Arguments cho tool")
+
+
+class BookingPlan(BaseModel):
+    """
+    ✨ V7 NEW: Support parallel tool calling with List[ToolCall]
+    """
+    thought: str = Field(description="Suy nghĩ chi tiết bằng tiếng Việt về tình huống hiện tại")
+    analysis: str = Field(description="Phân tích: đã có gì, còn thiếu gì")
+    next_action: Literal["call_tool", "ask_user", "respond"] = Field(
+        description="Hành động tiếp theo: call_tool (gọi tool), ask_user (hỏi thêm), respond (trả lời)"
+    )
+    # ✨ CHANGE: Single → List (support parallel)
+    tool_calls: List[ToolCall] = Field(
+        default_factory=list,
+        description="""
+        Danh sách tools cần gọi (có thể 1 hoặc nhiều):
+        - [1 tool]: Sequential execution (thường dùng)
+        - [2+ tools]: Parallel execution CHỈ KHI chúng KHÔNG phụ thuộc nhau
+
+        Ví dụ parallel hợp lý:
+        • "So sánh salon gần tôi với tất cả chi nhánh" → get_near_salon + list_branches
+        • "Check lịch ở 2 salon" → 2× check_availability
+
+        Ví dụ PHẢI sequential:
+        • "Tìm salon → check lịch → book" (có dependency)
+        """
+    )
+    response: str = Field(default="", description="Câu trả lời cho user (nếu next_action=ask_user hoặc respond)")
+
+
+class InfoPlan(BaseModel):
+    """✨ V7 NEW: Info plan with parallel support"""
+    thought: str = Field(description="Suy nghĩ về câu hỏi của khách")
+    next_action: Literal["call_tool", "respond"] = Field(description="Hành động tiếp theo")
+    tool_calls: List[ToolCall] = Field(default_factory=list, description="Tools cần gọi (có thể nhiều)")
+    response: str = Field(default="", description="Câu trả lời nếu next_action=respond")
+
+
+# ========================= PARALLEL TOOL EXECUTOR =========================
+def _execute_single_tool(tool_call: dict, tool_map: dict) -> str:
+    """
+    Helper: Execute 1 tool và return formatted result
+    """
+    tool_name = tool_call.get("tool_name", "")
+    tool_args = tool_call.get("tool_args") or {}
+
+    if tool_name not in tool_map:
+        return f"❌ [{tool_name}] Tool không tồn tại. Available: {list(tool_map.keys())}"
+
+    if not tool_args and tool_name not in ["get_info", "list_branches"]:
+        return f"⚠️ [{tool_name}] Thiếu arguments"
+
+    try:
+        tool = tool_map[tool_name]
+        result = tool.invoke(tool_args)
+        print(f"[TOOL_EXECUTOR] ✅ {tool_name}: Success")
+        return f"✅ [{tool_name}]:\n{result}"
+    except Exception as e:
+        error_msg = f"❌ [{tool_name}] Error: {str(e)}"
+        print(f"[TOOL_EXECUTOR] {error_msg}")
+        return error_msg
+
+
+def parallel_tool_executor(tool_calls: List[dict], tool_map: dict) -> str:
+    """
+    ✨ V7 NEW: Execute multiple tools in parallel using ThreadPoolExecutor
+
+    Args:
+        tool_calls: List of {tool_name, tool_args}
+        tool_map: Dict mapping tool name to tool function
+
+    Returns:
+        Combined result string
+    """
+    if not tool_calls:
+        return "[No tools to execute]"
+
+    num_tools = len(tool_calls)
+    print(f"\n[TOOL_EXECUTOR] 🔧 Executing {num_tools} tool(s)")
+
+    # ============ SINGLE TOOL (Fast path) ============
+    if num_tools == 1:
+        return _execute_single_tool(tool_calls[0], tool_map)
+
+    # ============ MULTIPLE TOOLS (Parallel) ============
+    print(f"[TOOL_EXECUTOR] ⚡ Parallel execution mode")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=min(num_tools, 5)) as executor:
+        # Submit all tasks
+        future_to_tool = {
+            executor.submit(_execute_single_tool, tc, tool_map): tc
+            for tc in tool_calls
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_tool):
+            tool_call = future_to_tool[future]
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                tool_name = tool_call.get("tool_name", "unknown")
+                results.append(f"❌ [{tool_name}] Exception: {e}")
+
+    # Combine all results
+    combined = "\n\n".join(results)
+    return f"[Tool Results - Parallel Execution]:\n{combined}"
+
+
+# ========================= BOOKING AGENT V7 =========================
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+booking_tools = [get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches]
 TOOL_DESCRIPTIONS = "\n".join([safe_tool_description(t) for t in booking_tools])
-print("TOOL_DESCRIPTIONS generated:", TOOL_DESCRIPTIONS)  # Để debug
+print("TOOL_DESCRIPTIONS generated:", TOOL_DESCRIPTIONS)
+
+
+class BookingState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    plan: dict
+
+
+PARALLEL_GUIDELINES = """
+🔀 PARALLEL TOOL CALLING (V7 NEW):
+Bạn có thể gọi NHIỀU tools cùng lúc trong tool_calls CHỈ KHI:
+✅ Chúng KHÔNG phụ thuộc nhau (independent)
+✅ Chúng CẦN THIẾT cùng lúc để trả lời query
+
+📌 Ví dụ NÊN dùng parallel:
+• Query: "So sánh salon gần tôi với tất cả chi nhánh"
+  → tool_calls: [
+      {{"tool_name": "get_near_salon", "tool_args": {{"user_address": "...", "city": "Hà Nội"}}}},
+      {{"tool_name": "list_branches", "tool_args": {{}}}}
+    ]
+
+• Query: "Kiểm tra lịch trống ở salon A và salon B"
+  → tool_calls: [
+      {{"tool_name": "check_availability", "tool_args": {{"salon_address": "A", ...}}}},
+      {{"tool_name": "check_availability", "tool_args": {{"salon_address": "B", ...}}}}
+    ]
+
+❌ Ví dụ KHÔNG nên parallel (phải sequential):
+• Query: "Tìm salon gần tôi rồi book lịch"
+  → Lần 1: tool_calls: [{{"tool_name": "get_near_salon", ...}}]
+  → Đợi kết quả
+  → Lần 2: tool_calls: [{{"tool_name": "check_availability", ...}}]
+  → Lần 3: tool_calls: [{{"tool_name": "book_appointment", ...}}]
+
+🎯 Nguyên tắc: Khi nghi ngờ → Gọi tuần tự (an toàn hơn)
+"""
 
 
 def booking_planner(state: BookingState):
     """
-    Planner thông minh - suy nghĩ và lên plan trước khi hành động.
-    Output: BookingPlan với thought, analysis, next_action, tool_call, response
+    ✨ V7 Planner with parallel tool calling support
     """
     messages = state["messages"]
 
     system_prompt = f"""
 Today is: {datetime.now().strftime("%d/%m/%Y %H:%M")}
 
-Bạn là Janie – trợ lý đặt lịch 30Shine thông minh. Nhiệm vụ: phân tích và lên kế hoạch. Sử dụng linh hoạt các tool có sẵn
+Bạn là Janie – trợ lý đặt lịch 30Shine thông minh. Nhiệm vụ: phân tích và lên kế hoạch.
 
 === TOOLS CÓ SẴN ===
 {TOOL_DESCRIPTIONS}
 
+
 === QUY TRÌNH SUY NGHĨ ===
-1. Đọc kĩ tin nhắn và lịch sử chat của khách hàng
-2. Phân tích: đã có thông tin gì? còn thiếu gì và nen làm gì tieeps theo
+1. Đọc kỹ tin nhắn của khách
+2. Phân tích: đã có thông tin gì? còn thiếu gì?
 3. Quyết định hành động tiếp theo:
-   - "call_tool": Nếu đủ thông tin để gọi tool → điền tool_call
+   - "call_tool": Nếu đủ thông tin để gọi tool → điền tool_calls (có thể 1 hoặc nhiều)
    - "ask_user": Nếu thiếu thông tin quan trọng → điền response (câu hỏi)
    - "respond": Nếu đã hoàn thành hoặc chỉ cần trả lời → điền response
 
-
 === QUY TẮC QUAN TRỌNG ===
+- Nếu có địa chỉ (tên đường + thành phố) → GỌI get_near_salon ngay, KHÔNG hỏi thêm
+- Nếu khách muốn đặt lịch nhưng chưa có salon → tìm salon trước
+- Nếu có salon + ngày giờ → check_availability
+- Nếu slot OK + có SĐT → book_appointment
 - Phong cách response: xưng em, gọi anh, kết thúc bằng "ạ"
-
-# === QUAN TRỌNG: CÁCH ĐIỀN tool_call ===
-# Khi next_action="call_tool", BẮT BUỘC phải điền đầy đủ tool_call:
-# - tool_name: tên tool chính xác (get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches)
-# - tool_args: dict chứa các tham số cần thiết, PHẢI ĐIỀN ĐẦY ĐỦ
 """
-    #
-    # == = QUAN
-    # TRỌNG: CÁCH
-    # ĐIỀN
-    # tool_call == =
-    # Khi next_action="call_tool", BẮT BUỘC phải điền đầy đủ tool_call:
-    # - tool_name: tên tool chính xác (get_near_salon, check_availability, book_appointment, cancel_appointment, list_branches)
-    # - tool_args: dict chứa các tham số cần thiết, PHẢI ĐIỀN ĐẦY ĐỦ
-    #
-    # Ví dụ tool_args cho từng tool:
-    # - get_near_salon: tool_args phải có "user_address" (bắt buộc), "city" (optional, default "Hà Nội")
-    # - check_availability: tool_args phải có "salon_address", "date", "time"
-    # - book_appointment: tool_args phải có "salon_address", "date", "time", "phone"
-    # - cancel_appointment: tool_args phải có "phone"
-    # - list_branches: không cần tool_args
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("placeholder", "{messages}")
     ])
 
-    print(messages)
-
-    # Dùng method="function_calling" vì OpenAI structured output không hỗ trợ dict type
     chain = prompt | llm.with_structured_output(BookingPlan, method="function_calling")
 
     try:
         plan: BookingPlan = chain.invoke({"messages": messages})
         print(f"\n[PLANNER] 💭 Thought: {plan.thought}")
-        # print(f"[PLANNER] 📊 Analysis: {plan.analysis}")
+        print(f"[PLANNER] 📊 Analysis: {plan.analysis}")
         print(f"[PLANNER] ➡️ Next Action: {plan.next_action}")
-        if plan.tool_call:
-            print(f"[PLANNER] 🔧 Tool: {plan.tool_call.tool_name}({plan.tool_call.tool_args})")
+        if plan.tool_calls:
+            print(f"[PLANNER] 🔧 Tools ({len(plan.tool_calls)}): {[tc.tool_name for tc in plan.tool_calls]}")
         if plan.response:
             print(f"[PLANNER] 💬 Response: {plan.response[:100]}...")
     except Exception as e:
         print(f"[PLANNER] ❌ Error: {e}")
         plan = BookingPlan(
             thought="Lỗi parse, cần hỏi lại",
-            # analysis="Không parse được",
+            analysis="Không parse được",
             next_action="ask_user",
             response="Dạ anh ơi, em chưa hiểu lắm, anh nói rõ hơn được không ạ?"
         )
 
     return {
-        # "messages": [AIMessage(content=f"[Plan] {plan.thought}", name="planner")],
+        "messages": [AIMessage(content=f"[Plan] {plan.thought}", name="planner")],
         "plan": plan.model_dump()
     }
 
 
 def tool_executor(state: BookingState):
     """
-    Thực thi tool dựa trên plan từ planner.
-    ✨ V5 UPDATE: Dùng ToolMessage (chuẩn) với AIMessage.tool_calls trước đó.
+    ✨ V7 Tool executor with parallel support
     """
     plan = state.get("plan", {})
-    tool_call = plan.get("tool_call") or {}
-    tool_name = tool_call.get("tool_name", "")
-    tool_args = tool_call.get("tool_args") or {}
+    tool_calls = plan.get("tool_calls") or []
 
-    print(f"\n[TOOL_EXECUTOR] 🔧 Executing: {tool_name}")
-    print(f"[TOOL_EXECUTOR] 📥 Args: {tool_args}")
-
-    # Tìm và gọi tool
     tool_map = {t.name: t for t in booking_tools}
-
-    if tool_name not in tool_map:
-        result = f"Tool '{tool_name}' không tồn tại. Tools có sẵn: {list(tool_map.keys())}"
-        print(f"[TOOL_EXECUTOR] ❌ {result}")
-    elif not tool_args:
-        # Nếu không có args, báo lỗi để planner thử lại
-        result = f"Thiếu arguments cho tool {tool_name}. Tool này cần các tham số."
-        print(f"[TOOL_EXECUTOR] ⚠️ {result}")
-    else:
-        try:
-            tool = tool_map[tool_name]
-            result = tool.invoke(tool_args)
-            print(f"[TOOL_EXECUTOR] ✅ Result: {result}")
-        except Exception as e:
-            result = f"Lỗi khi gọi {tool_name}: {e}"
-            print(f"[TOOL_EXECUTOR] ❌ {result}")
-
-    # ✨ V5 UPDATE: OpenAI yêu cầu ToolMessage phải có AIMessage với tool_calls trước
-    # Generate tool_call_id
-    tool_call_id = f"call_{uuid.uuid4().hex[:24]}"
+    result = parallel_tool_executor(tool_calls, tool_map)
 
     return {
-        "messages": [
-            # 1. AIMessage giả với tool_calls (format LangChain)
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": tool_name,
-                    "args": tool_args,
-                    "id": tool_call_id,
-                    "type": "tool_call"
-                }]
-            ),
-            # 2. ToolMessage với kết quả
-            ToolMessage(
-                content=result,
-                tool_call_id=tool_call_id,
-                name=tool_name
-            )
-        ]
+        "messages": [HumanMessage(content=result)]
     }
 
 
 def booking_responder(state: BookingState):
-    """
-    Tạo response cuối cùng từ plan.response
-    """
+    """Tạo response cuối cùng từ plan.response"""
     print("\n" + "="*50)
     print("[BOOKING_RESPONDER] ▶ Tạo response")
 
@@ -408,11 +415,9 @@ def booking_responder(state: BookingState):
         text = response
         print(f"[BOOKING_RESPONDER] ✅ Dùng response từ plan: {text[:100]}...")
     else:
-        # Fallback: tổng hợp từ conversation
         print("[BOOKING_RESPONDER] 📝 Tổng hợp từ conversation...")
         prompt = ChatPromptTemplate.from_messages([
-            ("system",
-             "Tổng hợp lại cuộc trò chuyện thành câu trả lời tự nhiên. Xưng em, gọi anh, kết thúc bằng ạ."),
+            ("system", "Tổng hợp lại cuộc trò chuyện thành câu trả lời tự nhiên. Xưng em, gọi anh, kết thúc bằng ạ."),
             ("placeholder", "{messages}")
         ])
         text = (prompt | llm).invoke({"messages": state["messages"]}).content
@@ -423,11 +428,7 @@ def booking_responder(state: BookingState):
 
 
 def booking_router(state: BookingState):
-    """
-    Router dựa trên plan.next_action:
-    - "call_tool" → tool_executor
-    - "ask_user" / "respond" → responder
-    """
+    """Router dựa trên plan.next_action"""
     print("\n" + "-"*30)
     print("[BOOKING_ROUTER] 🔀 Routing...")
 
@@ -445,42 +446,27 @@ def booking_router(state: BookingState):
 
 
 def create_booking_agent():
-    """
-    Graph structure:
-
-    START → planner → [router] → tool_executor → planner (loop)
-                         ↓
-                      respond → END
-    """
+    """Build booking agent graph with V7 parallel support"""
     g = StateGraph(BookingState)
 
-    # Nodes
     g.add_node("planner", booking_planner)
     g.add_node("tool_executor", tool_executor)
     g.add_node("respond", booking_responder)
 
-    # Edges
     g.add_edge(START, "planner")
     g.add_conditional_edges(
         "planner",
         booking_router,
         {"tool_executor": "tool_executor", "respond": "respond"}
     )
-    g.add_edge("tool_executor", "planner")  # Loop back sau khi có tool result
+    g.add_edge("tool_executor", "planner")
     g.add_edge("respond", END)
 
     return g.compile(checkpointer=MemorySaver())
 
 
-# ========================= CUSTOM INFORMATION AGENT =========================
+# ========================= INFORMATION AGENT V7 =========================
 info_tools = [get_info, list_branches, get_near_salon]
-
-
-class InfoPlan(BaseModel):
-    thought: str = Field(description="Suy nghĩ NGẮN GỌN (1 câu) về hành động cần làm")
-    next_action: Literal["call_tool", "respond"] = Field(description="Hành động tiếp theo")
-    tool_call: ToolCall | None = Field(default=None, description="Tool cần gọi nếu next_action=call_tool")
-    response: str = Field(default="", description="Câu trả lời nếu next_action=respond")
 
 
 def info_planner(state):
@@ -495,11 +481,10 @@ def info_planner(state):
 === TOOLS ===
 {info_tool_desc}
 
-Nếu biết câu trả lời → next_action="respond", điền response
-Nếu cần tra cứu → next_action="call_tool", điền tool_call
+{PARALLEL_GUIDELINES}
 
-⚡ QUAN TRỌNG:
-- thought: CHỈ 1 câu ngắn (vd: "Cần lấy thông tin giá")
+Nếu biết câu trả lời → next_action="respond", điền response
+Nếu cần tra cứu → next_action="call_tool", điền tool_calls (có thể nhiều nếu independent)
 
 Phong cách: xưng em, gọi anh, kết thúc bằng ạ."""),
         ("placeholder", "{messages}")
@@ -509,6 +494,8 @@ Phong cách: xưng em, gọi anh, kết thúc bằng ạ."""),
         plan = (prompt | llm.with_structured_output(InfoPlan, method="function_calling")).invoke({"messages": state["messages"]})
         print(f"[INFO_PLANNER] 💭 {plan.thought}")
         print(f"[INFO_PLANNER] ➡️ {plan.next_action}")
+        if plan.tool_calls:
+            print(f"[INFO_PLANNER] 🔧 Tools: {[tc.tool_name for tc in plan.tool_calls]}")
     except Exception as e:
         print(f"[INFO_PLANNER] ❌ Error: {e}")
         plan = InfoPlan(thought="Lỗi", next_action="respond", response="Dạ anh ơi, em chưa hiểu, anh hỏi lại nhé ạ!")
@@ -520,49 +507,13 @@ Phong cách: xưng em, gọi anh, kết thúc bằng ạ."""),
 
 
 def info_tool_executor(state):
-    """✨ V5 UPDATE: Dùng ToolMessage với AIMessage.tool_calls trước"""
     plan = state.get("plan", {})
-    tool_call = plan.get("tool_call") or {}
-    tool_name = tool_call.get("tool_name", "")
-    tool_args = tool_call.get("tool_args") or {}
-
-    print(f"[INFO_TOOL] 🔧 Executing: {tool_name}")
+    tool_calls = plan.get("tool_calls") or []
 
     tool_map = {t.name: t for t in info_tools}
-    if tool_name not in tool_map:
-        result = f"Tool '{tool_name}' không tồn tại"
-    elif not tool_args and tool_name not in ["get_info", "list_branches"]:  # Một số tool không cần args
-        result = f"Thiếu arguments cho tool {tool_name}"
-    else:
-        try:
-            result = tool_map[tool_name].invoke(tool_args)
-        except Exception as e:
-            result = f"Lỗi: {e}"
+    result = parallel_tool_executor(tool_calls, tool_map)
 
-    print(f"[INFO_TOOL] ✅ Result: {result}")
-
-    # ✨ V5 UPDATE: OpenAI yêu cầu ToolMessage phải có AIMessage với tool_calls trước
-    tool_call_id = f"call_{uuid.uuid4().hex[:24]}"
-    return {
-        "messages": [
-            # 1. AIMessage giả với tool_calls (format LangChain)
-            AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": tool_name,
-                    "args": tool_args,
-                    "id": tool_call_id,
-                    "type": "tool_call"
-                }]
-            ),
-            # 2. ToolMessage với kết quả
-            ToolMessage(
-                content=result,
-                tool_call_id=tool_call_id,
-                name=tool_name
-            )
-        ]
-    }
+    return {"messages": [HumanMessage(content=result)]}
 
 
 def info_responder(state):
@@ -588,7 +539,7 @@ def info_router(state):
 
 
 def create_information_agent():
-    g = StateGraph(BookingState)  # Reuse BookingState (có plan)
+    g = StateGraph(BookingState)
     g.add_node("planner", info_planner)
     g.add_node("tool_executor", info_tool_executor)
     g.add_node("respond", info_responder)
@@ -601,13 +552,13 @@ def create_information_agent():
     return g.compile(checkpointer=MemorySaver())
 
 
-# ========================= SUPERVISOR GRAPH (không validator) =========================
+# ========================= SUPERVISOR V7 (WITH TASK GROUPING) =========================
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     query: str
-    original_query: str  # ✨ NEW V5: Keep original query for task grouping
+    original_query: str  # ✨ NEW: Keep original query for task grouping
     chat_history: Annotated[list[AnyMessage], add_messages]
-    list_tasks: List[dict]  # [{"name": "booking_node", "status": "done"}]
+    list_tasks: List[dict]
 
 
 class Action(BaseModel):
@@ -615,14 +566,18 @@ class Action(BaseModel):
     query: str = Field(..., description="Query gửi cho agent này")
 
 
-class AgentRequest(BaseModel):
-    thought: str = Field(description="Your reasoning about what to do next")
-    action: List[Action] = Field(description="List of actions with agent names and their queries")
-
-
 class SupervisorPlan(BaseModel):
     actions: List[Action]
 
+
+SUPERVISOR_SYSTEM_PROMPT = """
+Bạn là Supervisor điều phối 2 agent chuyên biệt:
+
+booking_node → Đặt lịch, hủy lịch, check slot, tìm salon gần nhất
+information_node → Tư vấn giá, dịch vụ, combo, tiện ích, chỗ để xe, v.v.
+
+Phân tích query và trả về đúng JSON theo schema.
+"""
 
 booking_agent = create_booking_agent()
 information_agent = create_information_agent()
@@ -630,7 +585,7 @@ information_agent = create_information_agent()
 
 def group_tasks_by_agent(actions: List[Action], original_query: str) -> List[dict]:
     """
-    ✨ NEW V5: Group multiple tasks for same agent into 1 task with original query
+    ✨ V7 NEW: Group multiple tasks for same agent into 1 task with original query
 
     Args:
         actions: List of actions from supervisor plan
@@ -641,14 +596,14 @@ def group_tasks_by_agent(actions: List[Action], original_query: str) -> List[dic
 
     Example:
         Input: [
-            Action(name="booking_node", query="tìm salon"),
-            Action(name="booking_node", query="check lịch"),
-            Action(name="information_node", query="giá")
+            {name: "booking_node", query: "tìm salon"},
+            {name: "booking_node", query: "check lịch"},
+            {name: "information_node", query: "giá"}
         ]
 
         Output: [
-            {"name": "booking_node", "query": "<original_query>", "status": "pending"},
-            {"name": "information_node", "query": "<original_query>", "status": "pending"}
+            {name: "booking_node", query: "<original_query>", status: "pending"},
+            {name: "information_node", query: "<original_query>", status: "pending"}
         ]
     """
     # Deduplicate by agent name
@@ -687,11 +642,10 @@ def supervisor_node(state: AgentState):
 
     # Phân tích query mới
     print("[SUPERVISOR] 🔍 Phân tích query mới...")
-    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPTV4}] + state["messages"]
+    messages = [{"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT}] + state["messages"]
     response = llm.with_structured_output(SupervisorPlan).invoke(messages)
-    print(f"SUPERVISOR RESPONSE: {response}")
 
-    # ✨ NEW V5: Group tasks by agent + use original query
+    # ✨ V7 NEW: Group tasks by agent + use original query
     original_query = state.get("original_query") or state.get("query", "")
     tasks = group_tasks_by_agent(response.actions, original_query)
 
@@ -714,7 +668,6 @@ def booking_node(state: AgentState):
     print("\n" + "="*60)
     print("[BOOKING_NODE] 📅 Bắt đầu xử lý booking...")
     print(f"[BOOKING_NODE] Query: {state['query']}")
-    print(f"[BOOKING_NODE] Chat history length: {len(state.get('chat_history', []))}")
 
     result = booking_agent.invoke({"messages": state["chat_history"] + [HumanMessage(content=state["query"])]})
     final_msg = result["messages"][-1].content
@@ -736,7 +689,6 @@ def information_node(state: AgentState):
     print("\n" + "="*60)
     print("[INFO_NODE] ℹ️ Bắt đầu xử lý thông tin...")
     print(f"[INFO_NODE] Query: {state['query']}")
-    print(f"[INFO_NODE] Chat history length: {len(state.get('chat_history', []))}")
 
     result = information_agent.invoke({"messages": state["chat_history"] + [HumanMessage(content=state["query"])]})
     final_msg = result["messages"][-1].content
@@ -762,30 +714,28 @@ workflow.add_edge(START, "supervisor")
 app = workflow.compile(checkpointer=MemorySaver())
 
 
-
 # ========================= STREAMLIT UI =========================
-st.set_page_config(page_title="30Shine Agent", layout="wide")
-st.title("30Shine Multi-Agent System V5")
-st.caption("✨ NEW: ToolMessage Format + Task Grouping | Reduced Tool Redundancy")
+st.set_page_config(page_title="30Shine AgentV7", layout="wide")
+st.title("🚀 30Shine AgentV7: Parallel Tools + Task Grouping")
+st.caption("✨ New: Parallel tool calling | Smart supervisor task grouping")
 
-# KHỞI TẠO SESSION STATE (BẮT BUỘC!)
+# Session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = "30shine_chat_001"
+    st.session_state.thread_id = "30shine_v7_001"
 
-# Hiển thị lịch sử chat
+# Display chat history
 for msg in st.session_state.messages:
     if msg["role"] == "user":
         st.chat_message("user").write(msg["content"])
     else:
         st.chat_message("assistant").write(msg["content"])
 
-# Input từ user
+# User input
 if prompt := st.chat_input("Anh ơi, em nghe nè ạ..."):
-    # Lưu tin nhắn user
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
@@ -795,7 +745,7 @@ if prompt := st.chat_input("Anh ơi, em nghe nè ạ..."):
         inputs = {
             "messages": [HumanMessage(content=prompt)],
             "query": prompt,
-            "original_query": prompt,  # ✨ NEW V5: Keep original for task grouping
+            "original_query": prompt,  # ✨ NEW: Keep original for task grouping
             "chat_history": st.session_state.chat_history,
             "list_tasks": []
         }
@@ -806,10 +756,8 @@ if prompt := st.chat_input("Anh ơi, em nghe nè ạ..."):
                 msgs = chunk.get("messages", [])
                 if msgs and msgs[-1].content:
                     last_msg = msgs[-1]
-                    # Chỉ lấy tin nhắn từ agent thực sự kiện
                     if hasattr(last_msg, "name") and last_msg.name in ["booking_node", "information_node"]:
                         final_answer = last_msg.content
-                    # Trường hợp supervisor trả lời trực tiếp (nếu có)
                     elif len(msgs) == 1 and not hasattr(last_msg, "name"):
                         final_answer = last_msg.content
 
