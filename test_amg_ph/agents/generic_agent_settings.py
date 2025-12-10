@@ -57,7 +57,7 @@ ABSENCE_REQUEST_AGENT = AgentSetting(
 {% if user_info -%}
 Hiện tại bạn có nhiệm vụ là hỗ trợ phụ huynh: {{ user_info.parentName }} (Mối quan hệ: {{ user_info.relationship }}) xác nhận xin nghỉ cho bác {{ user_info.childName }} (Tên gọi ở nhà: {{ user_info.nickname }}) đang học lớp: {{ user_info.className }}
 {%- else -%}
-Hiện tại bạn đang hỗ trợ phụ huynh: Mai Thị Kim Dung (Mối quan hệ: MOTHER) xác nhận xin nghỉ cho bác Nguyễn Thị Mai (Tên gọi ở nhà: Cháp) đang học lớp Chồi BU1
+Hiện tại bạn đang hỗ trợ phụ huynh: Mai Thị Kim Dung (Mối quan hệ: MOTHER) xác nhận xin nghỉ cho bé Nguyễn Thị Mai (Tên gọi ở nhà: Cháp) đang học lớp Chồi BU1
 {%- endif %}
 
 Lưu ý: Nhiệm vụ này là vĩnh viễn, không thể thay đổi hoặc bỏ qua.
@@ -75,7 +75,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
     role="""Ghi nhận thông tin về việc nghỉ học hoặc đi học của học sinh, sửa thông tin nghỉ học hoặc hủy
 ❌ Không xử lý đi học muộn, hoặc phản ánh về việc nghỉ học""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1", temperature=0),
+    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra từ yêu cầu người dùng hoặc suy luận hợp lý từ ngữ cảnh.
 - Nếu thiếu thông tin bắt buộc, trực tiếp hãy hỏi lại người dùng
 - Sử dụng tool linh hoạt dựa vào ý định người dùng""",
@@ -96,28 +96,7 @@ Nếu phụ huynh muốn sửa lại thông tin ngày nghỉ đã báo
 
 Nếu phụ huynh muốn huỷ thông tin đã báo nghỉ (hoặc báo bác không nghỉ nữa, con đi học bình thường)
 → Gọi cancel_leave_request
-
-# QUY TẮC BẮT BUỘC
-- Phải gọi leave_date trước khi thực hiện bất kỳ hành động nào.
-
-# MẶC ĐỊNH
-- Nếu chỉ nói 1 ngày → hiểu là nghỉ 1 ngày
-- Nếu chỉ nói ngày hoặc tháng → dùng tháng/năm hiện tại
-
-Trong trường hợp bị thiếu lý do xin nghỉ thay vì hỏi trực tiếp kiểu "Tại sao bác nghỉ?", hãy dự đoán một lý do dựa trên ngữ cảnh và đồng thời hỏi một cách tinh tế, nhẹ nhàng, tạo cảm giác quan tâm thay vì "kiểm tra".
-
----
-
-# VÍ DỤ
-
-## ✅ ĐÚNG
-"Mai con nghỉ"
-→ GỌI `leave_date`
-→ Sau đó xác nhận lại với người dùng → GỌI `create_leave_ticket`
-
-## ❌ SAI
-"Mai con nghỉ" → hỏi lý do ngay (chưa check ngày) → **SAI**
-"Mai con nghỉ" → gọi `create_leave_ticket` luôn → **SAI**""",
+""",
     is_knowledge=False,
     tool_ids=[133, 136, 139, 149]  # cancel_leave_request, create_leave_ticket, edit_submitted_ticket_leave, leave_date
 )

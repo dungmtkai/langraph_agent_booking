@@ -66,6 +66,8 @@ class GenericAgent:
             rule=self.setting.rule
         )
 
+        print(f"[Plan system prompt]: {system_prompt}")
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("placeholder", "{messages}")
