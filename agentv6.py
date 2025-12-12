@@ -152,6 +152,8 @@ class BookingState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     plan: dict  # Lưu plan hiện tại từ planner
     pending_tools: List[str]  # ✨ V6: Danh sách tools đang chờ execute
+    # ✨ V7: Dùng thought_history thay vì executed_tools
+    thought_history: List[str]  # Chain of thoughts - memory cho subagent
 
 
 # ========================= V6 SCHEMAS =========================
@@ -161,9 +163,9 @@ class ToolSelection(BaseModel):
     # reason: str = Field(default="", description="Lý do ngắn gọn tại sao chọn tool này")
 
 
-# ✨ V6: BookingPlan hỗ trợ NHIỀU tools (selected_tools là List)
+# ✨ V7: BookingPlan với thought format ngắn gọn làm memory
 class BookingPlan(BaseModel):
-    thought: str = Field(description="Phân tích đã có gì thiếu gì và cần làm gì tiếp theo (tối đa 2 câu)")
+    thought: str = Field(description="Đã làm gì, thiếu thông tin gì cần làm gì tiếp theo")
     next_action: Literal["call_tool", "ask_user", "respond"] = Field(
         description="Hành động tiếp theo: call_tool (gọi tool), ask_user (hỏi thêm), respond (trả lời)"
     )
@@ -205,21 +207,36 @@ TOOL_DESCRIPTIONS = "\n".join([safe_tool_description(t) for t in booking_tools])
 print("TOOL_DESCRIPTIONS generated:", TOOL_DESCRIPTIONS)
 
 
-# ========================= V6 BOOKING PLANNER =========================
+# ========================= V7 HELPER =========================
+def format_thought_history(thought_history: List[str]) -> str:
+    """Format thought history cho prompt - mỗi thought là 1 step"""
+    if not thought_history:
+        return "(Bắt đầu conversation mới)"
+    # Đánh số để LLM thấy flow
+    return "\n".join([f"[Step {i+1}] {t}" for i, t in enumerate(thought_history)])
+
+
+# ========================= V7 BOOKING PLANNER =========================
 def booking_planner(state: BookingState):
     """
-    ✨ V6 Planner - CHỈ chọn tools, KHÔNG extract arguments
-    Output: BookingPlan với thought, next_action, selected_tools (chỉ có tool_name), response
+    ✨ V7 Planner - Dùng thought_history làm memory
+    - Đọc thought history để biết đã làm gì
+    - Generate thought mới theo format ngắn gọn
+    - Append vào history cho turn sau
     """
     messages = state["messages"]
+    thought_history = state.get("thought_history", [])
 
     system_prompt = f"""
 Today is: {datetime.now().strftime("%d/%m/%Y %H:%M")}
 
-Bạn là Janie – trợ lý đặt lịch 30Shine thông minh. Nhiệm vụ: phân tích và lên kế hoạch. Sử dụng linh hoạt các tool có sẵn
+Bạn là Janie – trợ lý đặt lịch 30Shine. Nhiệm vụ: phân tích và lên kế hoạch.
 
-=== TOOLS CÓ SẴN ===
+=== TOOLS ===
 {TOOL_DESCRIPTIONS}
+
+=== THOUGHT HISTORY (BỘ NHỚ CỦA BẠN) ===
+{format_thought_history(thought_history)}
 
 === QUY TRÌNH SUY NGHĨ ===
 1. Đọc kĩ tin nhắn và lịch sử chat của khách hàng
@@ -239,7 +256,7 @@ Bạn là Janie – trợ lý đặt lịch 30Shine thông minh. Nhiệm vụ: p
         ("placeholder", "{messages}")
     ])
 
-    print(messages)
+    print(prompt)
 
     chain = prompt | llm.with_structured_output(BookingPlan, method="function_calling")
 
@@ -261,22 +278,29 @@ Bạn là Janie – trợ lý đặt lịch 30Shine thông minh. Nhiệm vụ: p
             response="Dạ anh ơi, em chưa hiểu lắm, anh nói rõ hơn được không ạ?"
         )
 
-    # ✨ V6: Lưu danh sách tools cần execute
+    # ✨ V7: Lưu tools cần execute + append thought vào history
     pending_tools = [t.tool_name for t in plan.selected_tools] if plan.next_action == "call_tool" else []
+
+    # Append thought mới vào history (giữ tối đa 5 thought gần nhất)
+    updated_thought_history = thought_history + [plan.thought]
+    if len(updated_thought_history) > 5:
+        updated_thought_history = updated_thought_history[-5:]
 
     return {
         "plan": plan.model_dump(),
-        "pending_tools": pending_tools
+        "pending_tools": pending_tools,
+        "thought_history": updated_thought_history
     }
 
 
-# ========================= V6 TOOL EXECUTOR (Function Calling) =========================
+# ========================= V7 TOOL EXECUTOR (Function Calling) =========================
 def tool_executor(state: BookingState):
     """
-    ✨ V6 Tool Executor:
+    ✨ V7 Tool Executor:
     - Nhận danh sách tools từ planner (chỉ có tool_name)
     - Gọi ChatGPT với function calling để extract arguments
     - Execute tools và trả về kết quả
+    - KHÔNG track executed_tools - dùng thought_history thay thế
     """
     pending_tools = state.get("pending_tools", [])
     messages = state["messages"]
@@ -361,6 +385,7 @@ QUAN TRỌNG:
         print(f"[TOOL_EXECUTOR] ❌ Exception: {e}")
         new_messages = []
 
+    # ✨ V7: Không cần track executed_tools - thought_history đã làm việc này
     return {
         "messages": new_messages,
         "pending_tools": []
@@ -445,7 +470,7 @@ info_tools = [get_info, list_branches, get_near_salon]
 
 
 class InfoPlan(BaseModel):
-    thought: str = Field(description="Suy nghĩ NGẮN GỌN (1 câu) về hành động cần làm")
+    thought: str = Field(description="Format: CÓ:x,y | LÀM:tool→kq | CẦN:next (ngắn gọn)")
     next_action: Literal["call_tool", "respond"] = Field(description="Hành động tiếp theo")
     selected_tools: List[ToolSelection] = Field(default=[], description="Tools cần gọi nếu next_action=call_tool")
     response: str = Field(default="", description="Câu trả lời nếu next_action=respond")
@@ -456,6 +481,7 @@ def info_planner(state):
     print("[INFO_PLANNER] ▶ Planning")
 
     info_tool_desc = "\n".join([safe_tool_description(t) for t in info_tools])
+    thought_history = state.get("thought_history", [])
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", f"""Bạn là Janie chuyên tư vấn dịch vụ 30Shine.
@@ -463,11 +489,13 @@ def info_planner(state):
 === TOOLS ===
 {info_tool_desc}
 
-Nếu biết câu trả lời → next_action="respond", điền response
-Nếu cần tra cứu → next_action="call_tool", điền selected_tools (CHỈ CẦN tool_name, KHÔNG cần arguments)
+=== THOUGHT HISTORY ===
+{format_thought_history(thought_history)}
 
-⚡ QUAN TRỌNG:
-- thought: CHỈ 1 câu ngắn (vd: "Cần lấy thông tin giá")
+=== QUY TẮC ===
+1. User BỔ SUNG info → dùng kết quả cũ, tiếp tục flow
+2. User THAY ĐỔI (hỏi khác) → gọi tool mới
+3. Thought format: CÓ:x,y | LÀM:tool→kq | CẦN:next (ngắn gọn!)
 
 Phong cách: xưng em, gọi anh, kết thúc bằng ạ."""),
         ("placeholder", "{messages}")
@@ -485,15 +513,21 @@ Phong cách: xưng em, gọi anh, kết thúc bằng ạ."""),
 
     pending_tools = [t.tool_name for t in plan.selected_tools] if plan.next_action == "call_tool" else []
 
+    # ✨ V7: Append thought vào history
+    updated_thought_history = thought_history + [plan.thought]
+    if len(updated_thought_history) > 5:
+        updated_thought_history = updated_thought_history[-5:]
+
     return {
         "messages": [AIMessage(content=f"[Info Plan] {plan.thought}", name="info_planner")],
         "plan": plan.model_dump(),
-        "pending_tools": pending_tools
+        "pending_tools": pending_tools,
+        "thought_history": updated_thought_history
     }
 
 
 def info_tool_executor(state):
-    """✨ V6: Dùng function calling để extract args"""
+    """✨ V7: Dùng function calling để extract args, không track executed_tools"""
     pending_tools = state.get("pending_tools", [])
     messages = state["messages"]
 
@@ -546,6 +580,7 @@ def info_tool_executor(state):
         print(f"[INFO_TOOL] ❌ Error: {e}")
         new_messages = []
 
+    # ✨ V7: Không cần track executed_tools - thought_history đã làm việc này
     return {
         "messages": new_messages,
         "pending_tools": []
@@ -595,6 +630,9 @@ class AgentState(TypedDict):
     original_query: str
     chat_history: Annotated[list[AnyMessage], add_messages]
     list_tasks: List[dict]
+    # ✨ V7: Lưu thought_history cho mỗi agent
+    booking_thought_history: List[str]
+    info_thought_history: List[str]
 
 
 class Action(BaseModel):
@@ -668,11 +706,20 @@ def booking_node(state: AgentState):
     print("[BOOKING_NODE] 📅 Bắt đầu xử lý booking...")
     print(f"[BOOKING_NODE] Query: {state['query']}")
 
+    # ✨ V7: Lấy thought_history từ supervisor state
+    prev_thought_history = state.get("booking_thought_history", [])
+    print(f"[BOOKING_NODE] 📋 Thought history từ trước: {prev_thought_history}")
+
     result = booking_agent.invoke({
         "messages": state["chat_history"] + [HumanMessage(content=state["query"])],
-        "pending_tools": []
+        "pending_tools": [],
+        "thought_history": prev_thought_history  # ✨ V7: Truyền thought_history
     })
     final_msg = result["messages"][-1].content
+
+    # ✨ V7: Lấy thought_history mới từ subgraph
+    new_thought_history = result.get("thought_history", prev_thought_history)
+    print(f"[BOOKING_NODE] 📋 Thought history mới: {new_thought_history}")
 
     print(f"[BOOKING_NODE] 📝 Kết quả: {final_msg[:100]}...")
 
@@ -683,7 +730,13 @@ def booking_node(state: AgentState):
 
     print("[BOOKING_NODE] → Quay về supervisor")
     print("="*60)
-    return Command(update={"messages": [AIMessage(content=final_msg, name="booking_node")]}, goto="supervisor")
+    return Command(
+        update={
+            "messages": [AIMessage(content=final_msg, name="booking_node")],
+            "booking_thought_history": new_thought_history  # ✨ V7: Lưu lại
+        },
+        goto="supervisor"
+    )
 
 
 def information_node(state: AgentState):
@@ -691,11 +744,20 @@ def information_node(state: AgentState):
     print("[INFO_NODE] ℹ️ Bắt đầu xử lý thông tin...")
     print(f"[INFO_NODE] Query: {state['query']}")
 
+    # ✨ V7: Lấy thought_history từ supervisor state
+    prev_thought_history = state.get("info_thought_history", [])
+    print(f"[INFO_NODE] 📋 Thought history từ trước: {prev_thought_history}")
+
     result = information_agent.invoke({
         "messages": state["chat_history"] + [HumanMessage(content=state["query"])],
-        "pending_tools": []
+        "pending_tools": [],
+        "thought_history": prev_thought_history  # ✨ V7: Truyền thought_history
     })
     final_msg = result["messages"][-1].content
+
+    # ✨ V7: Lấy thought_history mới từ subgraph
+    new_thought_history = result.get("thought_history", prev_thought_history)
+    print(f"[INFO_NODE] 📋 Thought history mới: {new_thought_history}")
 
     print(f"[INFO_NODE] 📝 Kết quả: {final_msg[:100]}...")
 
@@ -706,7 +768,13 @@ def information_node(state: AgentState):
 
     print("[INFO_NODE] → Quay về supervisor")
     print("="*60)
-    return Command(update={"messages": [AIMessage(content=final_msg, name="information_node")]}, goto="supervisor")
+    return Command(
+        update={
+            "messages": [AIMessage(content=final_msg, name="information_node")],
+            "info_thought_history": new_thought_history  # ✨ V7: Lưu lại
+        },
+        goto="supervisor"
+    )
 
 
 # Build final graph
@@ -748,7 +816,10 @@ if prompt := st.chat_input("Anh ơi, em nghe nè ạ..."):
             "query": prompt,
             "original_query": prompt,
             "chat_history": st.session_state.chat_history,
-            "list_tasks": []
+            "list_tasks": [],
+            # ✨ V7: Init thought_history (sẽ được load từ session nếu có)
+            "booking_thought_history": st.session_state.get("booking_thought_history", []),
+            "info_thought_history": st.session_state.get("info_thought_history", [])
         }
 
         final_answer = None
@@ -766,6 +837,11 @@ if prompt := st.chat_input("Anh ơi, em nghe nè ạ..."):
                 st.session_state.messages.append({"role": "assistant", "content": final_answer})
                 st.session_state.chat_history.append(HumanMessage(content=prompt))
                 st.session_state.chat_history.append(AIMessage(content=final_answer))
+                # ✨ V7: Lưu thought_history vào session
+                if "booking_thought_history" in chunk:
+                    st.session_state.booking_thought_history = chunk["booking_thought_history"]
+                if "info_thought_history" in chunk:
+                    st.session_state.info_thought_history = chunk["info_thought_history"]
                 st.chat_message("assistant").write(final_answer)
             else:
                 fallback = "Dạ anh ơi, em chưa hiểu lắm, anh nói lại giúp em được không ạ?"
