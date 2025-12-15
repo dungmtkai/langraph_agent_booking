@@ -165,7 +165,7 @@ class ToolSelection(BaseModel):
 
 # ✨ V7: BookingPlan với thought format ngắn gọn làm memory
 class BookingPlan(BaseModel):
-    thought: str = Field(description="Đã làm gì, thiếu thông tin gì cần làm gì tiếp theo")
+    thought: str = Field(description="Đã làm gì, thiếu thông tin gì cần làm gì tiếp theo (1-2 câu)")
     next_action: Literal["call_tool", "ask_user", "respond"] = Field(
         description="Hành động tiếp theo: call_tool (gọi tool), ask_user (hỏi thêm), respond (trả lời)"
     )
@@ -173,7 +173,14 @@ class BookingPlan(BaseModel):
         default=[],
         description="Danh sách tools cần gọi (có thể chọn nhiều tools để gọi song song). Chỉ điền khi next_action=call_tool"
     )
-    response: str = Field(default="", description="Câu trả lời cho user (nếu next_action=ask_user hoặc respond)")
+    response: str = Field(
+        default="",
+        description=(
+            "Nội dung câu trả lời gửi cho user. "
+            "Trường này PHẢI để rỗng khi next_action='tool_call'. "
+            "Trường này CHỈ được điền khi next_action='respond' hoặc next_action='ask_user'."
+        )
+    )
 
 
 # Hàm an toàn để lấy tên + tham số + description (giữ nguyên từ V5)
@@ -230,7 +237,7 @@ def booking_planner(state: BookingState):
     system_prompt = f"""
 Today is: {datetime.now().strftime("%d/%m/%Y %H:%M")}
 
-Bạn là Janie – trợ lý đặt lịch 30Shine. Nhiệm vụ: phân tích và lên kế hoạch.
+Bạn là Janie – trợ lý đặt lịch 30Shine.
 
 === TOOLS ===
 {TOOL_DESCRIPTIONS}
@@ -247,7 +254,10 @@ Bạn là Janie – trợ lý đặt lịch 30Shine. Nhiệm vụ: phân tích v
    - "respond": Nếu đã hoàn thành hoặc chỉ cần trả lời → điền response
 
 === QUY TẮC QUAN TRỌNG ===
-- selected_tools có thể là danh sách các tool nếu có thể thực hiện song song
+- selected_tools có thể chứa nhiều tool nếu có thể thực hiện song song.
+- Khi next_action="call_tool": response **PHẢI để rỗng**.
+- Khi next_action="respond" hoặc "ask_user": response **PHẢI có nội dung**.
+
 - Phong cách response: xưng em, gọi anh, kết thúc bằng "ạ"
 """
 
@@ -322,15 +332,10 @@ def tool_executor(state: BookingState):
     # ✨ V6: Gọi ChatGPT với function calling để extract arguments
     system_prompt = f"""
 Bạn là assistant trích xuất thông tin từ cuộc hội thoại để gọi tools.
-Hãy phân tích cuộc hội thoại và gọi các tools phù hợp với thông tin có sẵn.
-
 Today is: {datetime.now().strftime("%d/%m/%Y %H:%M")}
 
 QUAN TRỌNG:
 - Bạn PHẢI gọi các tools sau: {pending_tools}
-- Nếu thiếu thông tin bắt buộc, hãy dùng giá trị mặc định hợp lý hoặc suy luận từ context
-- Với ngày/giờ: nếu user nói "mai", "chiều nay", etc. → convert sang format cụ thể
-- Với địa chỉ: lấy từ context hoặc dùng thông tin user đã cung cấp
 """
 
     llm_with_tools = ChatOpenAI(model="gpt-4.1-mini", temperature=0).bind_tools(
