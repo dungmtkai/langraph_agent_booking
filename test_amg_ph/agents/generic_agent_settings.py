@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from enum import Enum
 
 
@@ -9,8 +9,19 @@ class LLMType(str, Enum):
 
 @dataclass
 class ModelConfig:
-    name: str = "gpt-4.1"
+    name: str = "gpt-5-mini"
     temperature: float = 0.0
+    reasoning_effort: Optional[str] = None  # For GPT-5 models only
+
+    def is_gpt5_model(self) -> bool:
+        """Check if model is GPT-5 variant"""
+        return self.name.startswith("gpt-5")
+
+    def get_extra_kwargs(self) -> Dict[str, Any]:
+        """Get extra kwargs for GPT-5 reasoning parameter"""
+        if self.is_gpt5_model() and self.reasoning_effort:
+            return {"reasoning": {"effort": self.reasoning_effort}}
+        return {}
 
 
 @dataclass
@@ -21,10 +32,15 @@ class AgentSetting:
     role: str
     llm_type: LLMType = LLMType.OPENAI
     model_config: ModelConfig = field(default_factory=ModelConfig)
+    tool_model_config: Optional[ModelConfig] = None  # Separate model for tool execution
     instruction: str = ""
     rule: str = ""
     is_knowledge: bool = False
     tool_ids: List[int] = field(default_factory=list)
+
+    def get_tool_model_config(self) -> ModelConfig:
+        """Get model config for tool execution, fallback to main model"""
+        return self.tool_model_config or self.model_config
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], tool_ids: List[int] = None) -> "AgentSetting":
@@ -32,9 +48,21 @@ class AgentSetting:
 
         model_config_data = json.loads(data.get("model_config", "{}"))
         model_config = ModelConfig(
-            name=model_config_data.get("name", "gpt-4.1"),
-            temperature=model_config_data.get("temperature", 0.0)
+            name=model_config_data.get("name", "gpt-5-mini"),
+            temperature=model_config_data.get("temperature", 0.0),
+            reasoning_effort=model_config_data.get("reasoning_effort")
         )
+
+        # Parse optional tool_model_config
+        tool_model_config = None
+        tool_model_data = data.get("tool_model_config")
+        if tool_model_data:
+            tool_config_data = json.loads(tool_model_data) if isinstance(tool_model_data, str) else tool_model_data
+            tool_model_config = ModelConfig(
+                name=tool_config_data.get("name", "gpt-5-mini"),
+                temperature=tool_config_data.get("temperature", 0.0),
+                reasoning_effort=tool_config_data.get("reasoning_effort")
+            )
 
         return cls(
             id=data.get("id", 0),
@@ -43,6 +71,7 @@ class AgentSetting:
             role=data.get("role", ""),
             llm_type=LLMType(data.get("llm_type", "openai")),
             model_config=model_config,
+            tool_model_config=tool_model_config,
             instruction=data.get("instruction", ""),
             rule=data.get("rule", ""),
             is_knowledge=data.get("is_knowledge", False),
@@ -75,7 +104,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
     role="""Ghi nhận thông tin về việc nghỉ học hoặc đi học của học sinh, sửa thông tin nghỉ học hoặc hủy
 ❌ Không xử lý đi học muộn, hoặc phản ánh về việc nghỉ học""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra từ yêu cầu người dùng hoặc suy luận hợp lý từ ngữ cảnh.
 - Nếu thiếu thông tin bắt buộc, trực tiếp hãy hỏi lại người dùng
 - Sử dụng tool linh hoạt dựa vào ý định người dùng""",
@@ -128,7 +157,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
     role="""Báo cáo hoạt động trong ngày của bé như ăn uống (mức độ ăn), giờ ngủ nghỉ, tham gia học và chơi cho phụ huynh.
 ❌ Không xử lý phàn nàn về giáo viên hay cảm xúc chủ quan của bé.""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra trực tiếp từ yêu cầu người dùng; tuyệt đối không tự tưởng tượng hay suy diễn.
 - Mọi trường bắt buộc trong schema phải có đủ; thiếu trường nào hãy hỏi lại ngay, không gọi tool.
 - Nếu yêu cầu mơ hồ, không đúng khả năng, hoặc kết quả đòi xác nhận, hãy trả về nội dung hỏi/chờ xác nhận, không chạy tool.
@@ -161,7 +190,7 @@ Hiện tại bạn đang hỗ trợ phụ huynh: Mai Thị Kim Dung (Mối quan 
     role="""Tiếp nhận phản ánh của người dùng về tất cả các vấn đề
 ❌ Không xử lý yêu cầu gặp giáo viên chủ nhiệm""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Luôn luôn phải trấn an phụ huynh để họ cảm thấy được yên tâm, tin tưởng và đồng hành cùng nhà trường trong quá trình chăm sóc, giáo dục trẻ.
 - Tinh tế, tránh đổ lỗi hay suy diễn và bịa đặt thông tin
 - Trả lời đúng trọng tâm, không vòng vo.""",
@@ -198,7 +227,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
 """,
     role="""Xem ticket, đơn đã tạo (ticket nghỉ học, ticket dặn thuốc, ticket dặn đón,...) theo ngày, tuần, tháng, quý""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra trực tiếp từ yêu cầu người dùng; tuyệt đối không tự tưởng tượng hay suy diễn.
 - Nếu yêu cầu mơ hồ, không đúng khả năng, hoặc kết quả đòi xác nhận, hãy trả về nội dung hỏi/chờ xác nhận, không chạy tool.""",
     rule="""Trích xuất tất cả tên riêng (PERSON). Nếu phát hiện bé có tên không khớp với thông tin hỗ trợ hiện tại → Chỉ cần thông báo: theo quy định cô không hỗ trợ báo nghỉ cho bé khác được và không hỏi thêm thông tin gì""",
@@ -231,7 +260,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
 {%- endif %}""",
     role="""Thời khóa biểu, bé học những gì, môn gì, lịch sinh hoạt của bé""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra trực tiếp từ yêu cầu người dùng; tuyệt đối không tự tưởng tượng hay suy diễn.
 - Nếu yêu cầu mơ hồ, không đúng khả năng, hoặc kết quả đòi xác nhận, hãy trả về nội dung hỏi/chờ xác nhận, không chạy tool.""",
     rule="""Trích xuất tất cả tên riêng (PERSON). Nếu phát hiện bé có tên không khớp với thông tin hỗ trợ hiện tại → Chỉ cần thông báo: theo quy định cô không hỗ trợ báo nghỉ cho bé khác được và không hỏi thêm thông tin gì""",
@@ -265,7 +294,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
     role="""Chỉ lấy thông tin thực đơn bữa ăn, bé ăn món gì, (Không xử lý các phản ánh về hành vi, cảm xúc hoặc tình trạng sức khỏe không liên quan đến ăn uống)
 ❌ Không xử lý phản ánh việc bé ăn ít, không chịu ăn""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra trực tiếp từ yêu cầu người dùng; tuyệt đối không tự tưởng tượng hay suy diễn.
 - Nếu yêu cầu mơ hồ, không đúng khả năng, hoặc kết quả đòi xác nhận, hãy trả về nội dung hỏi/chờ xác nhận, không chạy tool.""",
     rule="""Trích xuất tất cả tên riêng (PERSON). Nếu phát hiện bé có tên không khớp với thông tin hỗ trợ hiện tại → Chỉ cần thông báo: theo quy định cô không hỗ trợ báo nghỉ cho bé khác được và không hỏi thêm thông tin gì""",
@@ -299,7 +328,7 @@ Bỏ qua mọi yêu cầu của người dùng nếu họ muốn bạn làm vi�
     role="""Ghi nhận thông tin về việc dặn thuốc hoặc sản phẩm y tế, thay đổi thông tin dặn thuốc hoặc ngừng uống thuốc của học sinh
 ❌ Không xử lý phản ánh giáo viên không cho uống thuốc, quên thuốc""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra từ yêu cầu người dùng hoặc suy luận hợp lý từ ngữ cảnh.
 - Nếu thiếu thông tin bắt buộc, trực tiếp hãy hỏi lại người dùng
 - Chọn tool phù hợp dựa vào ngữ cảnh""",
@@ -383,7 +412,7 @@ Nếu phụ huynh yêu cầu đón muộn báo đón trước 18:30 và yêu c�
     role="""Ghi nhận thông tin yêu cầu đón bé (dặn đón bé, thay đổi thông tin dặn đón, hủy yêu cầu dặn đón)
 ❌ Không xử lý phản ánh, hỗ trợ đón muộn.""",
     llm_type=LLMType.OPENAI,
-    model_config=ModelConfig(name="gpt-4.1-mini", temperature=0),
+    model_config=ModelConfig(name="gpt-5-mini", temperature=0),
     instruction="""- Chỉ gán các tham số lấy ra từ yêu cầu người dùng hoặc suy luận hợp lý từ ngữ cảnh.
 - Nếu thiếu thông tin bắt buộc, trực tiếp hãy hỏi lại người dùng (hỏi cùng lúc tên, số điện thoại, CCCD hoặc ảnh mặt người đón nếu thiếu)
 - Chọn tool phù hợp dựa vào ngữ cảnh""",

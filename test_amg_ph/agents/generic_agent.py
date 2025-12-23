@@ -43,12 +43,20 @@ class GenericAgent:
         ]
         self.tool_map = {t.name: t for t in self.tools}
 
-        self.llm = ChatOpenAI(
-            model=setting.model_config.name,
-            temperature=setting.model_config.temperature
-        )
+        self.llm = self._create_llm()
 
         self._graph = None
+
+    def _create_llm(self, temperature: Optional[float] = None) -> ChatOpenAI:
+        """Create ChatOpenAI with GPT-5 reasoning support"""
+        temp = temperature if temperature is not None else self.setting.model_config.temperature
+        extra_kwargs = self.setting.model_config.get_extra_kwargs()
+
+        return ChatOpenAI(
+            model=self.setting.model_config.name,
+            temperature=temp,
+            **extra_kwargs
+        )
 
     @classmethod
     def from_id(cls, agent_id: int, **kwargs) -> "GenericAgent":
@@ -114,9 +122,13 @@ class GenericAgent:
 
         system_prompt = create_tool_executor_system_prompt(pending_tools)
 
+        # Use separate tool model if configured, otherwise fallback to main model
+        tool_model = self.setting.get_tool_model_config()
+        extra_kwargs = tool_model.get_extra_kwargs()
         llm_with_tools = ChatOpenAI(
-            model=self.setting.model_config.name,
-            temperature=0
+            model=tool_model.name,
+            temperature=0,
+            **extra_kwargs
         ).bind_tools(selected_tools, tool_choice="required")
 
         prompt = ChatPromptTemplate.from_messages([

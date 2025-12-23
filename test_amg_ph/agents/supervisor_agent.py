@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from . import SupervisorState, Action, SupervisorPlan
 from .generic_agent import GenericAgent
+from .generic_agent_settings import ModelConfig
 from .prompts import AGENT_NODE_TO_ID, build_supervisor_system_prompt
 
 
@@ -120,20 +121,30 @@ def create_agent_node(node_name: str, agent_registry: Dict[str, GenericAgent]):
     return agent_node
 
 
-def build_workflow(user_info: Optional[Dict[str, Any]] = None):
+def build_workflow(
+    user_info: Optional[Dict[str, Any]] = None,
+    supervisor_model: Optional[ModelConfig] = None
+):
     """Build supervisor workflow with all agent nodes
 
     Args:
         user_info: Optional user info dict to pass to all agents
-        model: LLM model name for supervisor
-        temperature: LLM temperature for supervisor
+        supervisor_model: Optional ModelConfig for supervisor LLM (default: gpt-4.1-mini)
 
     Returns:
         Compiled LangGraph workflow
     """
     agent_registry = _get_agent_registry(user_info)
 
-    llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
+    # Default to gpt-5-mini
+    model_config = supervisor_model or ModelConfig(name="gpt-5-mini", temperature=0)
+    extra_kwargs = model_config.get_extra_kwargs()
+
+    llm = ChatOpenAI(
+        model=model_config.name,
+        temperature=model_config.temperature,
+        **extra_kwargs
+    )
 
     workflow = StateGraph(SupervisorState)
 
