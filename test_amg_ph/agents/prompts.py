@@ -128,6 +128,7 @@ AGENT_NODE_TO_ID = {
     "meal_info_node": 164,
     "medication_instruction_node": 165,
     "pickup_authorization_node": 166,
+    "fallback_node": 167,
 }
 
 

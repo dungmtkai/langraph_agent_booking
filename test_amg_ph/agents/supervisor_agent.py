@@ -71,9 +71,15 @@ def create_supervisor_node(llm: ChatOpenAI):
         print(f"[SUPERVISOR] Grouped tasks: {[t['name'] for t in tasks]}")
 
         if not tasks:
-            print("[SUPERVISOR] Không có tasks → END")
+            print("[SUPERVISOR] Không có tasks → FALLBACK")
             print("#" * 60)
-            return Command(goto=END)
+            return Command(
+                goto="fallback_node",
+                update={
+                    "list_tasks": [{"name": "fallback_node", "query": original_query, "status": "pending"}],
+                    "query": original_query
+                }
+            )
 
         first_task = tasks[0]
         print(f"[SUPERVISOR] → Chuyển đến: {first_task['name']}")

@@ -190,15 +190,15 @@ def run_get_menu() -> Dict[str, Any]:
         "menu": [
             {
                 "date": today.strftime("%Y-%m-%d"),
-                "breakfast": "Pho bo, sua tuoi",
-                "lunch": "Com, ca kho, canh rau, trai cay",
-                "snack": "Banh mi, sua chua"
+                "breakfast": "Phở bò, sữa tươi",
+                "lunch": "Cơm, cá kho, canh rau, trái cây",
+                "snack": "Bánh mì, sữa chua"
             },
             {
                 "date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
-                "breakfast": "Bun rieu, nuoc cam",
-                "lunch": "Com, thit kho, rau xao, che dau",
-                "snack": "Xoi, tra sua"
+                "breakfast": "Bún riêu, nước ép cam",
+                "lunch": "Cơm, gà rán, rau luộc, chè trôi nước",
+                "snack": "Xôi, sữa đậu nành",
             }
         ],
         "week": today.isocalendar()[1],
